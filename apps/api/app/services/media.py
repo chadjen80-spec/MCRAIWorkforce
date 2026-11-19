@@ -4,6 +4,9 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import tempfile
+import time
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 
@@ -110,18 +113,39 @@ def find_ffmpeg() -> str:
         raise AgentError("FFMPEG_NOT_FOUND", f"FFmpeg is not installed and no bundled binary is available: {exc}") from exc
 
 
-def run_ffmpeg(args: list[str], timeout: int | None = None) -> str:
+def run_ffmpeg(args: list[str], timeout: int | None = None, *,
+               on_wait: Callable[[], None] | None = None, every: float = 30.0) -> str:
+    """Run FFmpeg and return its log (stderr).
+
+    Long renders can outlast the task lease, so `on_wait` (the agent's heartbeat) is called every
+    `every` seconds while FFmpeg runs; if it raises (e.g. the job was cancelled) FFmpeg is stopped and
+    the error propagates. FFmpeg's log goes to a temporary file, so its progress output can never fill
+    a pipe and stall the process.
+    """
     cmd = [find_ffmpeg(), "-hide_banner", "-nostdin", *args]
-    try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=timeout or get_settings().ffmpeg_timeout_seconds,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise AgentError("FFMPEG_TIMEOUT", "FFmpeg timed out", retryable=True) from exc
+    limit = timeout or get_settings().ffmpeg_timeout_seconds
+    deadline = time.monotonic() + limit
+    with tempfile.TemporaryFile() as log:
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=log)
+        try:
+            while True:
+                try:
+                    proc.wait(timeout=max(0.0, min(every, deadline - time.monotonic())))
+                    break
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() >= deadline:
+                        raise AgentError("FFMPEG_TIMEOUT", "FFmpeg timed out", retryable=True) from None
+                    if on_wait is not None:
+                        on_wait()
+        except BaseException:
+            proc.kill()
+            proc.wait()
+            raise
+        log.seek(0)
+        stderr = log.read().decode("utf-8", errors="replace")
     if proc.returncode != 0:
-        raise AgentError("FFMPEG_FAILED", f"FFmpeg exited with {proc.returncode}: {proc.stderr[-800:]}")
-    return proc.stderr
+        raise AgentError("FFMPEG_FAILED", f"FFmpeg exited with {proc.returncode}: {stderr[-800:]}")
+    return stderr
 
 
 _DURATION = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")

@@ -14,7 +14,9 @@ import {
 
 type Ctx = { params: Promise<{ path: string[] }> };
 
-const FORWARDED_REQUEST_HEADERS = ["content-type", "accept", "idempotency-key"];
+const FORWARDED_REQUEST_HEADERS = ["content-type", "accept", "idempotency-key", "range", "if-range"];
+// Passed back so file previews (drafts) can stream and seek like the signed-file route.
+const FORWARDED_RESPONSE_HEADERS = ["content-type", "content-length", "content-range", "accept-ranges", "content-disposition"];
 
 async function forward(request: NextRequest, ctx: Ctx): Promise<NextResponse> {
   const { path } = await ctx.params;
@@ -54,12 +56,15 @@ async function forward(request: NextRequest, ctx: Ctx): Promise<NextResponse> {
     return upstreamUnavailable();
   }
 
-  const resHeaders = new Headers({ "Cache-Control": "no-store" });
-  const contentType = upstream.headers.get("content-type");
-  if (contentType) resHeaders.set("Content-Type", contentType);
+  const resHeaders = new Headers({ "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
+  for (const name of FORWARDED_RESPONSE_HEADERS) {
+    const value = upstream.headers.get(name);
+    if (value) resHeaders.set(name, value);
+  }
 
   const noBody = upstream.status === 204 || upstream.status === 304 || request.method === "HEAD";
-  const res = new NextResponse(noBody ? null : await upstream.arrayBuffer(), {
+  // Stream the body instead of buffering it (large previews, video seeking).
+  const res = new NextResponse(noBody ? null : upstream.body, {
     status: upstream.status,
     headers: resHeaders,
   });

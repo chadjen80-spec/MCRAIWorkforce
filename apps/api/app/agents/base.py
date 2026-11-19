@@ -5,6 +5,7 @@ import hashlib
 import re
 import tempfile
 import uuid
+from contextvars import Token
 from dataclasses import dataclass, field
 from datetime import timedelta
 from decimal import Decimal
@@ -50,6 +51,12 @@ class AgentContext:
     used_demo: bool = False
     _workdir: tempfile.TemporaryDirectory | None = None
 
+    def __post_init__(self) -> None:
+        from app.services.budget import CURRENT_TASK
+
+        # Budget reservations made while this task runs are attached to it (released in cleanup()).
+        self._task_token: Token[uuid.UUID | None] | None = CURRENT_TASK.set(self.task.id)
+
     # -- environment ---------------------------------------------------------
     @property
     def workdir(self) -> Path:
@@ -61,6 +68,16 @@ class AgentContext:
         if self._workdir is not None:
             self._workdir.cleanup()
             self._workdir = None
+        from app.services.budget import CURRENT_TASK, release_task
+
+        try:
+            self.session.rollback()  # nothing half-written may ride along with the release
+            release_task(self.session, self.task.id)
+        finally:
+            token = getattr(self, "_task_token", None)
+            if token is not None:
+                CURRENT_TASK.reset(token)
+                self._task_token = None
 
     @property
     def brand(self) -> dict[str, Any]:
@@ -166,7 +183,8 @@ class AgentContext:
                 provider=provider, operation=operation, units=units, cost_usd=cost_usd,
             )
         )
-        # Atomic increments: several workers may bill the same job concurrently.
-        self.session.execute(update(Job).where(Job.id == self.job.id).values(actual_cost_usd=Job.actual_cost_usd + cost_usd))
-        self.session.execute(update(Task).where(Task.id == self.task.id).values(actual_cost_usd=Task.actual_cost_usd + cost_usd))
+        # Atomic: book the cost and release the matching part of this task's budget reservation.
+        from app.services.budget import settle
+
+        settle(self.session, org_id=self.org.id, job_id=self.job.id, task_id=self.task.id, cost=cost_usd)
         self.session.commit()

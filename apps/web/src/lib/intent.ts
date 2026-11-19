@@ -31,3 +31,17 @@ export function decide(answer: string, locale: Locale): "yes" | "no" | "design" 
   if (has(YES[locale])) return "yes";
   return "unclear";
 }
+
+export type ConfirmAction = "submit" | "cancel" | "design" | "ask_again";
+
+/**
+ * What Mira does with the spoken answer to "shall I start this job?". A paid job starts only on an
+ * explicit yes; "design" only applies to poster requests; anything unclear is asked again.
+ */
+export function confirmAction(answer: string, locale: Locale, command: string): ConfirmAction {
+  const verdict = decide(answer, locale);
+  if (verdict === "design") return POSTER_WORDS.test(command) ? "design" : "ask_again";
+  if (verdict === "yes") return "submit";
+  if (verdict === "no") return "cancel";
+  return "ask_again";
+}

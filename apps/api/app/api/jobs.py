@@ -27,6 +27,7 @@ from app.models import (
 )
 from app.security import verify_artifact_signature
 from app.services import orchestrator
+from app.services.budget import committed_this_month
 from app.services.router import month_spend
 from app.services.storage import get_storage
 from app.services.workers import queue_status
@@ -70,7 +71,7 @@ def _artifacts_out(session: Session, arts: list[Artifact], principal: Principal)
     for a in arts:
         released = status.get(a.job_id) in schemas.RELEASED_JOB_STATUSES
         out.append(schemas.artifact_out(a, tasks[a.task_id].key, tasks[a.task_id].agent, released=released,
-                                        link=released or principal.user is not None))
+                                        reviewer=principal.user is not None))
     return out
 
 
@@ -90,7 +91,7 @@ def create_job(
     else:
         project = orchestrator.default_project(session, org)
     budget = body.budget_limit_usd or org.default_job_budget_usd
-    if month_spend(session, org.id) >= org.monthly_budget_usd > 0:
+    if committed_this_month(session, org.id) >= org.monthly_budget_usd > 0:
         raise AppError(402, "BUDGET_EXCEEDED", "The organization's monthly budget is exhausted")
     agents = list(body.agents or schemas.ALL_AGENTS)
     aspect: str = body.aspect_ratio
@@ -392,15 +393,46 @@ def download_artifact(artifact_id: uuid.UUID, exp: int, sig: str, request: Reque
     if not verify_artifact_signature(artifact_id, exp, sig):
         raise AppError(403, "FORBIDDEN", "Download link is invalid or has expired")
     art = session.get(Artifact, artifact_id)
+    if art is None:
+        raise not_found("Artifact")
+    # A signed link is a shareable capability: it only ever serves released (approved) work, even if a
+    # link was issued before the job went back to review or was rejected.
+    if not _released(session, art):
+        raise AppError(403, "NOT_RELEASED", "This file is a draft awaiting approval and cannot be downloaded yet")
+    return _stream_artifact(art, request, cache="private, max-age=300")
+
+
+@router.get("/artifacts/{artifact_id}/preview", summary="Preview a file (including drafts) as a signed-in reviewer")
+def preview_artifact(artifact_id: uuid.UUID, request: Request, principal: Principal = Depends(get_principal),
+                     session: Session = Depends(get_db)):
+    """Internal review of drafts: requires a signed-in person of the same organisation; API keys
+    (automations) are refused for drafts, so nothing unapproved can be delivered automatically."""
+    art = session.scalar(select(Artifact).where(Artifact.id == artifact_id,
+                                                Artifact.organization_id == principal.organization.id))
+    if art is None:
+        raise not_found("Artifact")
+    if principal.user is None and not _released(session, art):
+        raise AppError(403, "NOT_RELEASED", "Drafts are only visible to signed-in reviewers until approved")
+    resp = _stream_artifact(art, request, cache="private, no-store")
+    resp.headers["X-Robots-Tag"] = "noindex"
+    return resp
+
+
+def _released(session: Session, art: Artifact) -> bool:
+    status = session.scalar(select(Job.status).where(Job.id == art.job_id))
+    return status in schemas.RELEASED_JOB_STATUSES
+
+
+def _stream_artifact(art: Artifact, request: Request, *, cache: str) -> Response:
     storage = get_storage()
-    if art is None or not storage.exists(art.storage_key):
+    if not storage.exists(art.storage_key):
         raise not_found("Artifact")
     size = storage.size(art.storage_key)
     inline = art.content_type.split("/")[0] in ("image", "video", "audio", "text") or art.content_type == "application/pdf"
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Disposition": f'{"inline" if inline else "attachment"}; filename="{art.filename}"',
-        "Cache-Control": "private, max-age=300",
+        "Cache-Control": cache,
         "X-Content-Type-Options": "nosniff",
     }
     start, end, status = 0, size - 1, 200

@@ -35,3 +35,12 @@ describe("safeUpstreamPath: what the proxy may forward to the API", () => {
     expect(safeUpstreamPath(["v1", "jobs#x"])).toBeNull();
   });
 });
+
+describe("fileUrl: where the dashboard fetches a file from", () => {
+  it("previews drafts through the signed-in proxy, never the signed-file route", async () => {
+    const { fileUrl } = await import("./api");
+    expect(fileUrl("/v1/artifacts/abc/preview")).toBe("/api/proxy/v1/artifacts/abc/preview");
+    expect(fileUrl("/v1/artifacts/abc/download?exp=1&sig=x")).toBe("/api/files/v1/artifacts/abc/download?exp=1&sig=x");
+    expect(fileUrl("/v1/assets/abc/file?exp=1&sig=x")).toBe("/api/files/v1/assets/abc/file?exp=1&sig=x");
+  });
+});

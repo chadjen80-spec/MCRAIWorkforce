@@ -442,7 +442,7 @@ def run(ctx: AgentContext) -> dict[str, Any]:
     args += ["-vf", f"fps={fps},scale={size[0]}:{size[1]},format=yuv420p", "-c:v", "libx264", "-preset", "veryfast",
              "-crf", "20", "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-t", f"{total:.3f}",
              "-movflags", "+faststart", str(out)]
-    run_ffmpeg(args)
+    run_ffmpeg(args, on_wait=ctx.heartbeat)  # the final render can take minutes: keep the lease alive
     ctx.heartbeat()
     info = probe_media(out)
     if not out.is_file() or out.stat().st_size == 0 or info.get("video_codec") != "h264":

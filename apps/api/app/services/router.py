@@ -71,22 +71,12 @@ def month_spend(session: Session, org_id) -> Decimal:
 
 
 def ensure_budget(session: Session, job: Job, org: Organization, estimated: Decimal) -> None:
-    """Refuse a paid call that would exceed the job budget or the tenant's monthly budget."""
-    if estimated <= 0:
-        return
-    session.refresh(job, ["actual_cost_usd"])
-    if job.actual_cost_usd + estimated > job.budget_limit_usd:
-        raise AgentError(
-            "BUDGET_EXCEEDED",
-            f"Job budget ${job.budget_limit_usd:.2f} would be exceeded "
-            f"(spent ${job.actual_cost_usd:.4f}, next call ~${estimated:.4f})",
-        )
-    spent = month_spend(session, org.id)
-    if spent + estimated > org.monthly_budget_usd:
-        raise AgentError(
-            "MONTHLY_BUDGET_EXCEEDED",
-            f"Organization monthly budget ${org.monthly_budget_usd:.2f} would be exceeded (spent ${spent:.4f})",
-        )
+    """Reserve the estimate of a paid call against the job and monthly budgets, atomically, or refuse
+    it (BUDGET_EXCEEDED / MONTHLY_BUDGET_EXCEEDED). The reservation is settled when the call is billed
+    and released when the task ends (app.services.budget)."""
+    from app.services import budget
+
+    budget.reserve(session, job, org, estimated)
 
 
 # --- policy ---------------------------------------------------------------------

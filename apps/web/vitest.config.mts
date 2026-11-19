@@ -1,13 +1,16 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
-// Unit tests for pure logic (no browser): src/**/*.test.ts.
+// Unit tests (src/**/*.test.ts, node) and component tests (src/**/*.test.tsx, jsdom per file).
 export default defineConfig({
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },
+  oxc: {
+    jsx: { runtime: "automatic" },
+  },
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.{ts,tsx}"],
   },
 });

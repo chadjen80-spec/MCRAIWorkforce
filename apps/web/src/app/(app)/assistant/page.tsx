@@ -40,7 +40,7 @@ import type {
   Session,
   Task,
 } from "@/lib/types";
-import { POSTER_WORDS, decide, posterIntent } from "@/lib/intent";
+import { POSTER_WORDS, confirmAction, posterIntent } from "@/lib/intent";
 import { useApi } from "@/lib/useApi";
 import { VoiceError, canListen, listenOnce, speak } from "@/lib/voice";
 
@@ -273,12 +273,11 @@ export default function AssistantPage() {
   // Listen for "yes / no / design it" about the command waiting for confirmation.
   const awaitDecision = async (text: string, signal: AbortSignal) => {
     if (signal.aborted || !canListen()) return; // no microphone: the Confirm / Cancel buttons remain
-    const poster = POSTER_WORDS.test(text);
     try {
-      const verdict = decide(await hear(signal), locale);
-      if (verdict === "design" && poster) await designPoster(text, signal);
-      else if (verdict === "yes") await submit(text, signal);
-      else if (verdict === "no") {
+      const action = confirmAction(await hear(signal), locale, text);
+      if (action === "design") await designPoster(text, signal);
+      else if (action === "submit") await submit(text, signal);
+      else if (action === "cancel") {
         setPending(null);
         await say(t("assistant.cancelled"), signal);
       } else await say(t("assistant.unclear"), signal);

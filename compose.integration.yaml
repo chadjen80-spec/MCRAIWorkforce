@@ -1,0 +1,30 @@
+# Integration-test overlay for the LOCAL stack (never for production):
+#   docker compose -f compose.yaml -f compose.integration.yaml up -d --build
+# - exposes PostgreSQL and Redis on localhost-only ports so the test suite can run against them
+#   from the host (TEST_DATABASE_URL), and
+# - moves the stack's API / web / n8n ports so they do not clash with a dev server already using
+#   8000 / 3000 on the same machine.
+# Requires Docker Compose v2.24+ (the !override tag).
+services:
+  postgres:
+    ports: ["127.0.0.1:55432:5432"]
+    networks: [backend, egress]   # the backend network is internal-only; egress lets the host reach the port
+
+  redis:
+    ports: ["127.0.0.1:56379:6379"]
+    networks: [backend, egress]
+
+  minio:
+    ports: ["127.0.0.1:59000:9000"]
+    networks: [backend, egress]
+
+  api:
+    ports: !override ["127.0.0.1:18000:8000"]
+
+  web:
+    ports: !override ["127.0.0.1:13000:3000"]
+
+  n8n:
+    ports: !override ["127.0.0.1:15678:5678"]
+    environment:
+      WEBHOOK_URL: http://localhost:15678/

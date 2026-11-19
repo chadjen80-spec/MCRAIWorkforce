@@ -22,7 +22,8 @@ from app.deps import Principal, get_principal, rate_limited
 from app.errors import AgentError, AppError
 from app.models import BrandAsset, UsageEvent
 from app.providers.config import resolve_openai
-from app.services.router import make_openai, month_spend
+from app.services.budget import committed_this_month
+from app.services.router import make_openai
 
 router = APIRouter(prefix="/v1/posters", tags=["posters"])
 
@@ -268,7 +269,7 @@ def poster_chat(body: PosterChatRequest, principal: Principal = Depends(get_prin
     if cfg is None:
         raise AppError(409, "PROVIDER_NOT_CONFIGURED", "Poster chat needs the OpenAI provider (Settings → AI providers)")
     estimate = settings.llm_estimated_usd_per_call
-    if month_spend(session, org.id) + estimate > org.monthly_budget_usd:
+    if committed_this_month(session, org.id) + estimate > org.monthly_budget_usd:
         raise AppError(402, "BUDGET_EXCEEDED", "The organization's monthly budget is exhausted")
 
     assets = list(session.scalars(select(BrandAsset).where(BrandAsset.organization_id == org.id)

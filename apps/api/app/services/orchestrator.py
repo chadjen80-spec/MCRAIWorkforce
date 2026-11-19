@@ -609,6 +609,11 @@ def reap_expired(session: Session) -> dict[str, int]:
             touched_jobs.add(task.job_id)
             stats["failed"] += 1
     session.commit()
+    from app.services.budget import release_task
+
+    for task in expired:
+        if task.status != TaskStatus.QUEUED or task.error_code == "LEASE_EXPIRED":
+            release_task(session, task.id)  # the dead worker's reservation would otherwise stay held
     for task in resend:
         send_task(task.id, task.agent)
     for job_id in touched_jobs:

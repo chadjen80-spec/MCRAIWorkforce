@@ -83,16 +83,16 @@ def test_acceptance_command_in_explicit_demo_mode(client, auth, fresh_state):
 
     # Real files: fetch each through its signed URL and verify the bytes.
     by_kind = {a["kind"]: a for a in arts}
-    pdf = client.get(by_kind["document_pdf"]["download_url"])
+    pdf = client.get(by_kind["document_pdf"]["download_url"], headers=auth)
     assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF-") and b"/FontFile2" in pdf.content
-    img = client.get(by_kind["image"]["download_url"])
+    img = client.get(by_kind["image"]["download_url"], headers=auth)
     assert Image.open(io.BytesIO(img.content)).size == (1920, 1080)
     video = by_kind["video"]
     assert video["metadata"]["video_codec"] == "h264" and video["metadata"]["audio_codec"] == "aac"
     assert (video["metadata"]["width"], video["metadata"]["height"]) == (1920, 1080)
     assert abs(video["metadata"]["duration_seconds"] - 60) <= 1.5
     assert any("voiceover" in lim for lim in video["metadata"]["limitations"])
-    part = client.get(video["download_url"], headers={"Range": "bytes=0-99"})
+    part = client.get(video["download_url"], headers={**auth, "Range": "bytes=0-99"})
     assert part.status_code == 206 and len(part.content) == 100
     assert part.headers["content-range"] == f"bytes 0-99/{video['size_bytes']}"
 
@@ -363,8 +363,10 @@ def test_login_is_rate_limited(client, org_a):
 def test_signed_urls_reject_tampering_and_expiry(client, auth, fresh_state):
     fresh_state.demo_mode = True
     job = submit(client, auth, command="Write 1 Thai Facebook caption")
+    # signed links exist only for released work: approve the (demo, human-review) job first
+    assert client.post(f"/v1/jobs/{job['id']}/approve", json={"decision": "approved"}, headers=auth).status_code == 200
     url = artifacts_of(client, auth, job["id"])[0]["download_url"]
-    assert client.get(url).status_code == 200
+    assert "sig=" in url and client.get(url).status_code == 200
     assert client.get(url[:-1] + ("0" if url[-1] != "0" else "1")).status_code == 403
     exp = int(url.split("exp=")[1].split("&")[0])
     assert client.get(url.replace(f"exp={exp}", f"exp={exp + 600}")).status_code == 403
@@ -606,7 +608,7 @@ def test_edit_text_deliverable(client, auth, org_b, fresh_state):
     assert edited.status_code == 200
     out = edited.json()
     assert out["text_preview"] == new and out["metadata"]["edited"] is True
-    data = client.get(out["download_url"]).content
+    data = client.get(out["download_url"], headers=auth).content
     assert data.decode() == new and hashlib.sha256(data).hexdigest() == out["sha256"] and len(data) == out["size_bytes"]
     with session_scope() as s:
         log = s.scalars(select(AuditLog).where(AuditLog.action == "artifact.edited")).one()
@@ -671,7 +673,7 @@ def test_regenerate_failure_keeps_the_image(client, auth, fake_comfyui, fresh_st
     assert [a["id"] for a in images] == [old["id"]]
     assert "PROVIDER_NOT_CONFIGURED" in images[0]["metadata"]["regenerate_error"]
     assert "regenerating_since" not in images[0]["metadata"]
-    assert client.get(old["download_url"]).status_code == 200
+    assert client.get(old["download_url"], headers=auth).status_code == 200
 
 
 def test_regenerate_caption(client, auth, org_b, fake_openai):
@@ -688,14 +690,14 @@ def test_regenerate_caption(client, auth, org_b, fake_openai):
     body = resp.json()
     art = body["artifact"]
     assert art["id"] == target["id"] and art["filename"] == "caption-01.txt"  # same file, new content
-    text = client.get(art["download_url"]).content.decode()
+    text = client.get(art["download_url"], headers=auth).content.decode()
     assert text.startswith("แคปชันใหม่") and "สอบถามข้อมูลเพิ่มเติม" in text and "#MCRSMECopilot" in text
     assert art["metadata"]["regenerated"] is True and art["text_preview"] == text
     assert any("100%" in w for w in body["warnings"])  # unsupported claim reported straight away
     sent = [c for c in fake_openai.calls if c.endswith("/chat/completions")]
     assert sent  # the rewrite went through the (fake) cloud model
     # the other caption is untouched; QA re-ran and flagged the new claim for review
-    assert client.get(other["download_url"]).content.decode() == other["text_preview"]
+    assert client.get(other["download_url"], headers=auth).content.decode() == other["text_preview"]
     after = client.get(f"/v1/jobs/{job['id']}", headers=auth).json()
     assert after["qa_verdict"] == "HUMAN_REVIEW" and after["status"] == "completed"
     events = [e["action"] for e in client.get(f"/v1/jobs/{job['id']}/events", headers=auth).json()["items"]]
@@ -715,7 +717,7 @@ def test_regenerate_caption_without_provider_is_refused(client, auth, fresh_stat
     fresh_state.demo_mode = False
     resp = client.post(f"/v1/artifacts/{cap['id']}/regenerate-caption", json={}, headers=auth)
     assert resp.status_code == 409 and resp.json()["error"]["code"] == "PROVIDER_NOT_CONFIGURED"
-    assert client.get(cap["download_url"]).content.decode() == cap["text_preview"]  # unchanged
+    assert client.get(cap["download_url"], headers=auth).content.decode() == cap["text_preview"]  # unchanged
 
 
 def test_regenerate_document_replaces_pdf_and_docx(client, auth, fake_openai):
@@ -731,7 +733,7 @@ def test_regenerate_document_replaces_pdf_and_docx(client, auth, fake_openai):
     new = {a["kind"]: a for a in artifacts_of(client, auth, job["id"]) if a["kind"] in ("document_pdf", "document_docx")}
     assert set(new) == {"document_pdf", "document_docx"}  # both formats replaced together, no duplicates
     assert all(new[k]["id"] != docs[k]["id"] and new[k]["metadata"]["regenerated"] for k in new)
-    assert client.get(new["document_pdf"]["download_url"]).content.startswith(b"%PDF-")
+    assert client.get(new["document_pdf"]["download_url"], headers=auth).content.startswith(b"%PDF-")
     assert not any(get_storage().exists(k) for k in old_keys)
     with session_scope() as s:
         task = s.scalar(select(Task).where(Task.job_id == uuid.UUID(job["id"]), Task.agent == "document"))
@@ -815,7 +817,7 @@ def _srt_starts(srt: str) -> list[float]:
 def test_voiceover_is_synced_per_scene(client, auth, fake_openai):
     job = submit(client, auth, command="Make 1 promotional MP4 video 15 seconds", agents=["video"], require_approval=False)
     arts = {a["kind"]: a for a in artifacts_of(client, auth, job["id"])}
-    manifest = json.loads(client.get(arts["manifest"]["download_url"]).content)
+    manifest = json.loads(client.get(arts["manifest"]["download_url"], headers=auth).content)
     scenes = manifest["scenes"]
     speech_calls = [c for c in fake_openai.calls if c.endswith("/audio/speech")]
     assert len(speech_calls) == len(scenes)  # one clip per scene
@@ -827,7 +829,7 @@ def test_voiceover_is_synced_per_scene(client, auth, fake_openai):
     for s in scenes:
         starts.append(round(t, 2))
         t += s["duration_seconds"]
-    srt = client.get(arts["subtitle"]["download_url"]).content.decode()
+    srt = client.get(arts["subtitle"]["download_url"], headers=auth).content.decode()
     assert [round(x, 2) for x in _srt_starts(srt)] == starts
     # the voice track covers the whole video
     from app.services.media import probe_media
@@ -921,7 +923,7 @@ def test_regenerate_from_subtitles_remakes_the_video_set(client, auth, fake_open
     assert client.post(f"/v1/artifacts/{old['subtitle']['id']}/regenerate", json={}, headers=auth).status_code == 202
     new = {a["kind"]: a for a in artifacts_of(client, auth, job["id"]) if a["kind"] in kinds}
     assert set(new) == set(old) and all(new[k]["id"] != old[k]["id"] for k in new)
-    srt = client.get(new["subtitle"]["download_url"]).content.decode()
+    srt = client.get(new["subtitle"]["download_url"], headers=auth).content.decode()
     assert srt.splitlines()[:2] == ["1", srt.splitlines()[1]] and srt.splitlines()[1].startswith("00:00:00,000 -->")
 
 
@@ -948,7 +950,7 @@ def test_regenerate_voiceover_keeps_the_script(client, auth, fake_openai):
     assert set(new) == set(old) and all(new[k]["id"] != old[k]["id"] for k in new)  # voice and video stay in sync
     assert calls["n"] == chats  # no new script was written
     assert new["script"]["text_preview"] == old["script"]["text_preview"]
-    scenes = json.loads(client.get(new["manifest"]["download_url"]).content)["scenes"]
+    scenes = json.loads(client.get(new["manifest"]["download_url"], headers=auth).content)["scenes"]
     assert sum(c.endswith("/audio/speech") for c in fake_openai.calls) - speech_before == len(scenes)
     assert abs(new["video"]["metadata"]["duration_seconds"] - 15) <= 1.5
     with session_scope() as s:
@@ -1007,7 +1009,7 @@ def test_poster_job_typesets_text_and_logos(client, auth, fake_openai):
     meta = images[0]["metadata"]
     assert (meta["width"], meta["height"]) == (1080, 1920) and meta["poster"]["title"] == "Valor City"
     assert "No text" in meta["prompt"] and "not based on any existing game" in meta["prompt"]
-    png = Image.open(io.BytesIO(client.get(images[0]["download_url"]).content)).convert("RGB")
+    png = Image.open(io.BytesIO(client.get(images[0]["download_url"], headers=auth).content)).convert("RGB")
     # the date banner is white and the sponsor bar holds the red logo
     assert any(png.getpixel((x, y)) == (220, 30, 30) for x in range(0, 1080, 4) for y in range(10, 110, 4))
     checks = client.get(f"/v1/jobs/{job['id']}/qa", headers=auth).json()["checks"]
@@ -1180,7 +1182,7 @@ def test_poster_with_own_artwork_skips_ai_and_costs_nothing(client, auth, fake_o
     assert job["estimated_cost_usd"] == 0 and job["actual_cost_usd"] == 0
     img = next(a for a in artifacts_of(client, auth, job["id"]) if a["kind"] == "image")
     assert img["metadata"]["artwork"] == "uploaded" and img["metadata"]["license"] == "user-supplied"
-    png = Image.open(io.BytesIO(client.get(img["download_url"]).content)).convert("RGB")
+    png = Image.open(io.BytesIO(client.get(img["download_url"], headers=auth).content)).convert("RGB")
     assert png.size == (1080, 1920)
     # the artwork is used as framed (not lowered): its colour reaches the top edge under the dark grade
     r, g, b = png.getpixel((540, 3))
@@ -1333,7 +1335,7 @@ def test_tournament_poster_job_is_4_by_5_with_qr_and_sponsor_strip(client, auth,
     meta = image["metadata"]
     assert (meta["width"], meta["height"]) == (1600, 2000) and meta["aspect_ratio"] == "4:5"
     assert meta["poster"]["template"] == "tournament" and "energy orb" in meta["prompt"]
-    png = Image.open(io.BytesIO(client.get(image["download_url"]).content)).convert("RGB")
+    png = Image.open(io.BytesIO(client.get(image["download_url"], headers=auth).content)).convert("RGB")
     assert png.getpixel((800, 1990)) == (0, 0, 0)  # black sponsor strip
     assert any(png.getpixel((x, 1960)) == (220, 30, 30) for x in range(0, 1600, 2))  # the red sponsor logo in it
     qr = [png.getpixel((x, y)) for x in range(1180, 1540, 6) for y in range(1530, 1800, 6)]
@@ -1419,7 +1421,7 @@ def test_tournament_with_own_characters_needs_no_ai_image(client, auth, fake_ope
     assert not any("images/generations" in c for c in fake_openai.calls[calls:])
     image = next(a for a in artifacts_of(client, auth, job["id"]) if a["kind"] == "image")
     assert image["metadata"]["artwork"] == "composed" and (image["metadata"]["width"], image["metadata"]["height"]) == (1600, 2000)
-    png = Image.open(io.BytesIO(client.get(image["download_url"]).content)).convert("RGB")
+    png = Image.open(io.BytesIO(client.get(image["download_url"], headers=auth).content)).convert("RGB")
     # the left character is on the left, the right one on the right
     assert png.getpixel((120, 520))[2] > 150 and png.getpixel((1480, 520))[0] > 150
     assert client.post(f"/v1/artifacts/{image['id']}/regenerate", json={}, headers=auth).status_code == 409
@@ -1495,3 +1497,97 @@ def test_worker_heartbeats_show_which_queues_have_no_worker(client, auth, fresh_
         assert set(summary["offline_queues"]) == {"document", "video", "qa"}
     finally:
         fresh_state.celery_task_always_eager = True
+
+
+def test_drafts_never_download_through_signed_links(client, auth, org_a, fake_openai):
+    from app.security import sign_artifact_url
+
+    key = {"X-API-Key": org_a["api_key"]}
+    job = submit(client, auth, require_approval=True)
+    assert job["status"] == "awaiting_approval", job
+    arts = artifacts_of(client, auth, job["id"])
+    cap = next(a for a in arts if a["kind"] == "caption")
+    # reviewers get the authenticated preview path, not a signed link
+    assert cap["download_url"] == f"/v1/artifacts/{cap['id']}/preview" and cap["text_preview"]
+    # a freshly signed link (e.g. leaked or minted earlier) is refused while the job is a draft
+    signed = sign_artifact_url(uuid.UUID(cap["id"]))
+    denied = client.get(signed)
+    assert denied.status_code == 403 and denied.json()["error"]["code"] == "NOT_RELEASED"
+    # preview: needs a signed-in person of the same org; API keys and strangers are refused
+    assert client.get(cap["download_url"]).status_code == 401
+    assert client.get(cap["download_url"], headers=key).status_code == 403
+    ok = client.get(cap["download_url"], headers=auth)
+    assert ok.status_code == 200 and "no-store" in ok.headers["cache-control"]
+    # automations see neither link nor text of drafts
+    by_key = next(a for a in client.get(f"/v1/jobs/{job['id']}/artifacts", headers=key).json()["items"] if a["id"] == cap["id"])
+    assert by_key["download_url"] is None and by_key["text_preview"] is None
+    # after approval the signed link works for everyone holding it
+    client.post(f"/v1/jobs/{job['id']}/approve", json={"decision": "approved"}, headers=auth)
+    released = next(a for a in client.get(f"/v1/jobs/{job['id']}/artifacts", headers=key).json()["items"] if a["id"] == cap["id"])
+    assert "sig=" in released["download_url"] and client.get(released["download_url"]).status_code == 200
+    assert client.get(signed).status_code == 200  # the earlier link now works too
+
+
+def test_draft_preview_is_scoped_to_the_organisation(client, auth, org_b, fake_openai):
+    job = submit(client, auth, require_approval=True)
+    art = artifacts_of(client, auth, job["id"])[0]
+    other = client.post("/v1/auth/login", json={"email": org_b["email"], "password": "correct-horse-battery"}).json()
+    assert client.get(art["download_url"], headers={"Authorization": f"Bearer {other['access_token']}"}).status_code == 404
+
+
+# --- reliability: long renders keep their lease (Phase 0) ----------------------------------
+SLOW_RENDER = ["-y", "-re", "-f", "lavfi", "-i", "anullsrc=r=8000:cl=mono", "-t", "3", "-f", "null", "-"]
+
+
+def test_long_ffmpeg_renders_keep_calling_the_heartbeat():
+    import time
+
+    from app.services.media import run_ffmpeg
+
+    beats = []
+    started = time.monotonic()
+    run_ffmpeg(SLOW_RENDER, on_wait=lambda: beats.append(time.monotonic()), every=0.5)
+    assert time.monotonic() - started >= 2.5
+    assert len(beats) >= 3  # about one beat per 0.5 s while FFmpeg ran
+
+
+def test_a_cancelled_job_stops_ffmpeg_promptly():
+    import time
+
+    from app.agents.base import JobCancelled
+    from app.services.media import run_ffmpeg
+
+    def cancel():
+        raise JobCancelled()
+
+    started = time.monotonic()
+    with pytest.raises(JobCancelled):
+        run_ffmpeg(SLOW_RENDER, on_wait=cancel, every=0.3)
+    assert time.monotonic() - started < 2  # killed at the first beat, not after the 3 s render
+
+
+def test_ffmpeg_timeout_still_applies():
+    from app.errors import AgentError
+    from app.services.media import run_ffmpeg
+
+    with pytest.raises(AgentError) as err:
+        run_ffmpeg(SLOW_RENDER, timeout=1, on_wait=lambda: None, every=0.2)
+    assert err.value.code == "FFMPEG_TIMEOUT" and err.value.retryable
+
+
+def test_video_task_lease_is_extended_during_the_final_render(client, auth, fake_openai, monkeypatch):
+    """The real video agent passes its heartbeat to the final FFmpeg render."""
+    from app.agents import video as video_agent
+
+    seen = {}
+    real = video_agent.run_ffmpeg
+
+    def spy(args, timeout=None, **kw):
+        if "libx264" in args:
+            seen["on_wait"] = kw.get("on_wait")
+        return real(args, timeout, **kw)
+
+    monkeypatch.setattr(video_agent, "run_ffmpeg", spy)
+    job = submit(client, auth, command="Create a 15 second promo video for MCR SME Copilot", require_approval=False)
+    assert job["status"] in ("completed", "awaiting_approval", "partial"), job
+    assert seen.get("on_wait") is not None and getattr(seen["on_wait"], "__name__", "") == "heartbeat"

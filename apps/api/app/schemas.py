@@ -333,13 +333,20 @@ RELEASED_JOB_STATUSES = frozenset({"completed", "partial"})
 
 
 def artifact_out(art: Artifact, task_key: str, agent: str, *, released: bool = True,
-                 link: bool = True) -> ArtifactOut:
+                 reviewer: bool = True) -> ArtifactOut:
+    """Released files get a signed, shareable download link. Drafts (job not released) never do: a
+    signed-in reviewer gets the authenticated preview path instead, and automations (API keys) get
+    neither a link nor the text."""
     meta = {k: v for k, v in (art.meta or {}).items() if k != "prompt_id"}
+    if released:
+        url: str | None = sign_artifact_url(art.id)
+    else:
+        url = f"/v1/artifacts/{art.id}/preview" if reviewer else None
     return ArtifactOut(
         id=art.id, job_id=art.job_id, task_id=art.task_id, task_key=task_key, agent=agent, kind=art.kind,
         filename=art.filename, content_type=art.content_type, size_bytes=art.size_bytes, sha256=art.sha256,
-        is_demo=art.is_demo, text_preview=art.text_preview, metadata=meta, released=released,
-        download_url=sign_artifact_url(art.id) if link else None, created_at=art.created_at,
+        is_demo=art.is_demo, text_preview=art.text_preview if (released or reviewer) else None, metadata=meta,
+        released=released, download_url=url, created_at=art.created_at,
     )
 
 

@@ -133,6 +133,8 @@ export async function authRequest<T>(path: "/api/auth/login" | "/api/auth/logout
  */
 export function fileUrl(downloadUrl: string): string {
   const path = downloadUrl.startsWith("/") ? downloadUrl : `/${downloadUrl}`;
+  // Drafts (awaiting approval) have no signed link: they are previewed through the signed-in proxy.
+  if (/^\/v1\/artifacts\/[^/]+\/preview$/.test(path)) return `/api/proxy${path}`;
   return `/api/files${path}`;
 }
 

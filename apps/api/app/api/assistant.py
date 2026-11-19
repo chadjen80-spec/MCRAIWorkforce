@@ -15,7 +15,8 @@ from app.deps import Principal, get_principal, rate_limited
 from app.errors import AgentError, AppError
 from app.models import UsageEvent
 from app.providers.config import resolve_openai
-from app.services.router import make_openai, month_spend
+from app.services.budget import committed_this_month
+from app.services.router import make_openai
 
 router = APIRouter(prefix="/v1/assistant", tags=["assistant"])
 
@@ -49,7 +50,7 @@ def speech(body: SpeechRequest, principal: Principal = Depends(get_principal), s
         raise AppError(409, "PROVIDER_NOT_CONFIGURED", "No cloud speech provider is configured")
     text = body.text.strip()
     cost = settings.tts_usd_per_1k_chars * Decimal(len(text)) / Decimal(1000)
-    if month_spend(session, org.id) + cost > org.monthly_budget_usd:
+    if committed_this_month(session, org.id) + cost > org.monthly_budget_usd:
         raise AppError(402, "BUDGET_EXCEEDED", "The organization's monthly budget is exhausted")
     try:
         audio = make_openai(cfg).synthesize_speech(
