@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { JobRow } from "@/components/status";
 import { Button, EmptyState, ErrorState, LoadingBlock, PageHeader, Pagination, RefreshError, buttonClass } from "@/components/ui";
@@ -11,9 +12,16 @@ import { useApi } from "@/lib/useApi";
 
 const LIMIT = 20;
 
+/** A ?status= value from the URL, or "" (all) when it is missing or not a real job status. */
+function statusFromParam(value: string | null): JobStatus | "" {
+  return value && (JOB_STATUSES as readonly string[]).includes(value) ? (value as JobStatus) : "";
+}
+
 export default function JobsPage() {
   const { t } = useI18n();
-  const [status, setStatus] = useState<JobStatus | "">("");
+  // Deep links such as /jobs?status=awaiting_approval (from the Assistant's operations panel) open filtered.
+  const params = useSearchParams();
+  const [status, setStatus] = useState<JobStatus | "">(() => statusFromParam(params.get("status")));
   const [offset, setOffset] = useState(0);
 
   const jobs = useApi<Paginated<Job>>(

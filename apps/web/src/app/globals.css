@@ -38,6 +38,16 @@ body {
   border-radius: 6px;
 }
 
+/* Assistant page in Thai: stacked vowel and tone marks need a little more size and line room than
+   Latin text. 12px Thai is hard to read, so the smallest text there is 13px. */
+.assistant-page:lang(th) {
+  line-height: 1.7;
+}
+.assistant-page:lang(th) .text-xs {
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+}
+
 ::selection {
   background: color-mix(in srgb, var(--color-brand) 45%, transparent);
 }

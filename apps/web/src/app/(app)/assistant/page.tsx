@@ -7,6 +7,9 @@ import { AgentGraph } from "@/components/AgentGraph";
 import { AssistantAvatar, type AvatarMode } from "@/components/AssistantAvatar";
 import { ChatBubbles } from "@/components/PosterChat";
 import { LogoUploadButton } from "@/components/LogoUploadButton";
+import { CommandComposer } from "@/components/assistant/CommandComposer";
+import { OpsSummary, StartGuide, TaskSuggestions } from "@/components/assistant/OpsPanel";
+import { QuickActions } from "@/components/assistant/QuickActions";
 import { Button, DemoBadge, buttonClass, cx } from "@/components/ui";
 import { JobStatusBadge } from "@/components/status";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -35,6 +38,7 @@ import type {
   ItemList,
   Job,
   JobStatus,
+  Paginated,
   PosterSpec,
   PosterTemplate,
   Session,
@@ -43,6 +47,7 @@ import type {
 import { POSTER_WORDS, confirmAction, posterIntent } from "@/lib/intent";
 import { useApi } from "@/lib/useApi";
 import { VoiceError, canListen, listenOnce, speak } from "@/lib/voice";
+import { isFirstRun, workflowById, type Workflow, type WorkflowId } from "@/lib/workflows";
 
 // Voice-first front door: a 3D assistant greets the user, listens to one spoken command,
 // repeats it back, and only starts the job after an explicit confirmation (spoken or clicked),
@@ -125,6 +130,19 @@ export default function AssistantPage() {
   );
   const job = monitor.data?.job;
   const settled = job ? SETTLED.includes(job.status) : false;
+
+  // --- operations overview (side panel) ---------------------------------------------------
+  const summary = useApi<DashboardSummary>("assistant:summary", (signal) => api<DashboardSummary>("/v1/dashboard/summary", { signal }), {
+    interval: 15000,
+  });
+  const waiting = useApi<Paginated<Job>>(
+    "assistant:waiting",
+    (signal) => api<Paginated<Job>>("/v1/jobs", { query: { status: "awaiting_approval", limit: 3 }, signal }),
+    { interval: 15000 },
+  );
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  // Set when a quick action filled the composer: shows what to add before sending.
+  const [filled, setFilled] = useState(false);
   const showPosterResult = Boolean(job && settled && posterJobs.includes(job.id));
   const posterResult = useApi<Artifact[]>(
     showPosterResult && job ? `assistant-poster:${job.id}` : null,
@@ -395,11 +413,11 @@ export default function AssistantPage() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  const sendTyped = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const sendTyped = async () => {
     const text = typed;
     const signal = begin();
     setTyped("");
+    setFilled(false);
     if (posterMode) await converse(text, signal);
     else {
       setJobId(null);
@@ -407,6 +425,27 @@ export default function AssistantPage() {
     }
     end(signal);
   };
+  // Quick actions never start a paid job by themselves: a command card puts its text in the composer
+  // (you add what it is for, then Send, then confirm); the poster card opens the free design on screen.
+  const pickWorkflow = async (w: Workflow) => {
+    if (posterMode) return;
+    if (w.kind === "poster") {
+      const signal = begin();
+      await designPoster(t(w.command), signal);
+      end(signal);
+      return;
+    }
+    setTyped(t(w.command));
+    setFilled(true);
+    const box = composerRef.current;
+    if (box) {
+      const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      box.scrollIntoView({ block: "center", behavior: still ? "auto" : "smooth" });
+      box.focus({ preventScroll: true });
+      requestAnimationFrame(() => box.setSelectionRange(box.value.length, box.value.length));
+    }
+  };
+  const startSuggested = (id: WorkflowId) => void pickWorkflow(workflowById(id));
   const createPosterNow = async () => {
     const signal = begin();
     await createPoster(signal);
@@ -509,6 +548,8 @@ export default function AssistantPage() {
     const failure = finished.status === "failed" || finished.status === "partial";
     if (success) setCelebrate(true);
     if (failure) setSorry(true);
+    summary.reload();
+    waiting.reload();
     await say(text, signal);
     end(signal);
     // hold the expression for a moment after she finishes speaking
@@ -587,11 +628,23 @@ export default function AssistantPage() {
   const posterStage = posterMode && !graphStage;
   const sideStage = graphStage || posterStage;
 
+  const s = summary.data;
+  const firstRun = isFirstRun(s);
   return (
+    <div lang={locale} className="assistant-page mx-auto max-w-7xl">
+      <header className="mb-4 flex flex-wrap items-end justify-between gap-2">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-bold leading-tight text-ink">{t("assistant.name")}</h1>
+          <p className="mt-1 text-base leading-relaxed text-dim">{t("assistant.subtitle")}</p>
+        </div>
+      </header>
+      {/* Phone order: Mira and the composer, then what needs attention, then quick actions.
+          Desktop: the operations panel sits in a right-hand column beside both. */}
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)] lg:grid-rows-[auto_1fr]">
+      <div className="min-w-0 lg:col-start-1 lg:row-start-1">
     <div
       ref={screenRef}
       className={cx(
-        "mx-auto max-w-5xl",
         fullScreen && "flex h-full max-w-none flex-col overflow-y-auto bg-bg p-3 sm:p-5",
         windowFull && "fixed inset-0 z-[60]",
       )}
@@ -832,9 +885,10 @@ export default function AssistantPage() {
         )}
       </div>
 
-      {/* controls */}
-      <div className={cx("mt-5 grid gap-4 md:grid-cols-[auto_1fr] md:items-center", fullScreen && "mx-auto w-full max-w-4xl")}>
-        <div className="flex items-center justify-center gap-4">
+      {/* controls: the primary action (talk to Mira) next to the typed command */}
+      <div className={cx("mt-5 grid gap-4 md:grid-cols-[auto_1fr] md:items-start", fullScreen && "mx-auto w-full max-w-4xl")}>
+        <div className="flex flex-col items-center gap-2 md:pt-2">
+          {!fullScreen && <p className="text-sm font-semibold text-cyan">{t("assistant.startHere")}</p>}
           <button
             type="button"
             data-talk="1"
@@ -857,9 +911,9 @@ export default function AssistantPage() {
 
         <div className="space-y-3">
           {pending && !busy && (
-            <div className="rounded-2xl border border-warn/50 bg-warn/10 p-3">
-              <p className="text-xs font-medium uppercase tracking-wide text-dim">{t("assistant.pendingLabel")}</p>
-              <p className="mt-1 text-sm text-ink">{pending}</p>
+            <div className="rounded-2xl border border-warn/50 bg-warn/10 p-3 sm:p-4">
+              <p className={cx("text-sm font-semibold text-warn", locale === "en" && "uppercase tracking-wide")}>{t("assistant.pendingLabel")}</p>
+              <p className="mt-1 whitespace-pre-wrap text-base leading-relaxed text-ink">{pending}</p>
               <div className="mt-3 flex flex-wrap gap-2">
                 <Button variant="primary" onClick={confirmPending}>
                   {t("assistant.confirmBtn")}
@@ -871,26 +925,49 @@ export default function AssistantPage() {
               </div>
             </div>
           )}
-          <form onSubmit={sendTyped} className="flex gap-2">
-            <label htmlFor="assistant-typed" className="sr-only">
-              {t("assistant.typeLabel")}
-            </label>
-            <input
-              id="assistant-typed"
-              value={typed}
-              onChange={(e) => setTyped(e.target.value)}
-              maxLength={4000}
-              placeholder={t("assistant.typePlaceholder")}
-              className="input"
-            />
-            <Button type="submit" variant="primary" disabled={typed.trim().length < (posterMode ? 1 : 5)} className="shrink-0 whitespace-nowrap">
-              {t("assistant.send")}
-            </Button>
-          </form>
-          <p className="text-xs text-dim">{t("assistant.hint")}</p>
+          <CommandComposer
+            id="assistant-typed"
+            inputRef={composerRef}
+            value={typed}
+            onChange={(v) => {
+              setTyped(v);
+              if (!v.trim()) setFilled(false);
+            }}
+            onSubmit={() => void sendTyped()}
+            minLength={posterMode ? 1 : 5}
+            label={posterMode ? t("posterStage.title") : t("composer.label")}
+            placeholder={posterMode ? t("assistant.typePlaceholder") : t("composer.placeholder")}
+            note={filled ? t("composer.filled") : undefined}
+          />
+          <p className="text-sm leading-relaxed text-dim">{t("assistant.hint")}</p>
         </div>
       </div>
+    </div>
 
+      </div>
+
+      <aside aria-label={t("ops.title")} className="space-y-4 lg:sticky lg:top-4 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:self-start">
+        {firstRun && <StartGuide />}
+        <OpsSummary
+          summary={s}
+          waiting={waiting.data?.items}
+          waitingTotal={waiting.data?.total}
+          failed={summary.error !== undefined}
+        />
+        <TaskSuggestions summary={s} onStart={startSuggested} disabled={posterMode} />
+      </aside>
+
+      {!fullScreen && (
+        <div className="min-w-0 lg:col-start-1 lg:row-start-2">
+          <QuickActions
+            onPick={(w) => void pickWorkflow(w)}
+            offline={s?.offline_queues}
+            disabled={posterMode}
+            disabledReason={t("qa.closeDesignFirst")}
+          />
+        </div>
+      )}
+      </div>
     </div>
   );
 }
