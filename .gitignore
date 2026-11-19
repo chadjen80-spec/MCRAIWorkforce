@@ -1,0 +1,26 @@
+.env
+.env.local
+.env.prod
+**/.env
+**/.env.local
+!**/.env.example
+apps/api/data/
+**/.venv/
+**/node_modules/
+**/.next/
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+*.tsbuildinfo
+
+# Local brand files and generated output (not source; third-party logos and finished posters)
+my-logos/
+posters/
+# Local tool state
+.claude/settings.local.json
+**/coverage/
+**/.coverage
+**/test-results/
+**/playwright-report/
+*.log

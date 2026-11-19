@@ -1,0 +1,54 @@
+# PRODUCTION overrides. Always used together with compose.yaml:
+#   docker compose --env-file .env.prod -f compose.yaml -f compose.prod.yaml up -d --build
+#
+# What changes versus development:
+# - Only Caddy publishes ports (80/443) and terminates HTTPS for APP_DOMAIN and N8N_DOMAIN.
+#   The app/n8n ports are bound to 127.0.0.1 on the host and are not reachable from outside.
+# - ENVIRONMENT=production: the API refuses to start with weak secrets, SQLite, a filesystem
+#   broker or eager tasks, and demo mode is off.
+# - Every third-party image must be pinned (the ${VAR:?} checks abort the deploy otherwise).
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:?pin POSTGRES_IMAGE to an exact tag or digest}
+    restart: always
+  redis:
+    image: ${REDIS_IMAGE:?pin REDIS_IMAGE to an exact tag or digest}
+    restart: always
+  minio:
+    image: ${MINIO_IMAGE:?pin MINIO_IMAGE to an exact tag or digest}
+    restart: always
+  migrate:
+    command: ["alembic", "upgrade", "head"]   # no automatic seeding in production
+  api:
+    restart: always
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*", "--workers", "2"]
+  worker-core:
+    restart: always
+  worker-image:
+    restart: always
+  worker-video:
+    restart: always
+  worker-maintenance:
+    restart: always
+  web:
+    restart: always
+  n8n:
+    image: ${N8N_IMAGE:?pin N8N_IMAGE to an exact tag or digest}
+    restart: always
+  caddy:
+    image: ${CADDY_IMAGE:?pin CADDY_IMAGE to an exact tag or digest}
+    restart: always
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN}
+      N8N_DOMAIN: ${N8N_DOMAIN:?set N8N_DOMAIN}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./infrastructure/docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [backend, egress]
+    depends_on: [web, n8n]
+
+volumes:
+  caddy-data:
+  caddy-config:

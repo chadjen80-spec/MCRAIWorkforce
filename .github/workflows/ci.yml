@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: API (lint, types, tests on SQLite)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - name: Thai fonts and FFmpeg (posters, documents, video tests)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-thai-tlwg fonts-noto-core ffmpeg
+      - run: uv sync --frozen
+      - run: uv run ruff check app tests
+      - run: uv run mypy app
+      - run: uv run pytest -q
+
+  api-postgres:
+    name: API tests on PostgreSQL + Redis
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: mcr
+          POSTGRES_PASSWORD: mcr-ci-only
+          POSTGRES_DB: mcr_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U mcr" --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://mcr:mcr-ci-only@localhost:5432/mcr_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - name: Thai fonts and FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-thai-tlwg fonts-noto-core ffmpeg
+      - run: uv sync --frozen
+      - name: Migrations apply cleanly on PostgreSQL
+        env:
+          DATABASE_URL: postgresql+psycopg://mcr:mcr-ci-only@localhost:5432/mcr_test
+        run: uv run alembic upgrade head && uv run alembic downgrade base && uv run alembic upgrade head
+      - name: Test suite on PostgreSQL
+        run: uv run pytest -q
+
+  web:
+    name: Web (lint, types, unit tests, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build

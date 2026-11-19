@@ -1,0 +1,19 @@
+# Production reverse proxy with automatic HTTPS for the dashboard and n8n.
+# The API, PostgreSQL, Redis, MinIO, workers and ComfyUI are never exposed publicly;
+# browsers reach the API only through the dashboard's server-side proxy.
+{$APP_DOMAIN} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-x-middleware-rewrite
+	}
+	reverse_proxy web:3000
+}
+
+{$N8N_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy n8n:5678
+}

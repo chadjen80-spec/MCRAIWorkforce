@@ -1,0 +1,146 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-inter), var(--font-noto-thai), ui-sans-serif, system-ui, sans-serif;
+}
+
+@theme {
+  --color-bg: #060a13;
+  --color-surface: #0c1322;
+  --color-raised: #121b2e;
+  --color-line: #22304c;
+  --color-ink: #e8eef9;
+  --color-dim: #9aa9c4;
+  --color-brand: #3b82f6;
+  --color-brand-soft: #7fb0ff;
+  --color-cyan: #22d3ee;
+  --color-ok: #34d399;
+  --color-warn: #fbbf24;
+  --color-bad: #f87171;
+}
+
+html {
+  color-scheme: dark;
+  background: var(--color-bg);
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  /* Thai glyphs carry stacked vowel/tone marks; a roomier line height keeps them from clipping. */
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-cyan);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-brand) 45%, transparent);
+}
+
+@layer components {
+  .input {
+    @apply w-full rounded-lg border border-line bg-bg px-3 py-2 text-sm text-ink placeholder:text-dim/70 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+  .input:focus-visible {
+    outline: 2px solid var(--color-cyan);
+    outline-offset: 0;
+    border-color: transparent;
+  }
+  .label {
+    @apply mb-1.5 block text-sm font-medium text-ink;
+  }
+  .hint {
+    @apply mt-1.5 text-xs text-dim;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Agent graph motion (components/AgentGraph.tsx) */
+@keyframes ag-pulse {
+  0% { transform: scale(1); opacity: 0.9; }
+  100% { transform: scale(1.55); opacity: 0; }
+}
+@keyframes ag-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes ag-beam {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+@keyframes ag-twinkle {
+  0%, 100% { opacity: 0.2; }
+  50% { opacity: 0.9; }
+}
+@keyframes ag-dash {
+  to { stroke-dashoffset: -26; }
+}
+@keyframes ag-breathe {
+  0%, 100% { transform: scale(0.82); opacity: 0.55; }
+  50% { transform: scale(1.12); opacity: 1; }
+}
+@keyframes ag-chase {
+  to { stroke-dashoffset: -100; }
+}
+@keyframes ag-icon-glow {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+@keyframes ag-icon-pulse {
+  0%, 100% { filter: drop-shadow(0 0 1px rgb(255 255 255 / 0.5)); }
+  50% { filter: drop-shadow(0 0 5px #fff) drop-shadow(0 0 10px rgb(255 255 255 / 0.7)); }
+}
+@keyframes ag-sheen {
+  0%, 35% { translate: -150% 0; }
+  75%, 100% { translate: 480% 0; }
+}
+@keyframes assistant-ring {
+  0% { transform: translate(-50%, -50%) scale(0.85); opacity: 0.9; }
+  100% { transform: translate(-50%, -50%) scale(1.25); opacity: 0; }
+}
+@keyframes stage-swap {
+  from { opacity: 0; transform: translateY(14px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes sparkle {
+  0%, 100% { transform: scale(0.2) rotate(0deg); opacity: 0; }
+  50% { transform: scale(1) rotate(45deg); opacity: 1; }
+}
+@keyframes mic-ring {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-bad) 60%, transparent); }
+  100% { box-shadow: 0 0 0 12px transparent; }
+}
+.ag-pulse { animation: ag-pulse 1.8s ease-out infinite; }
+.ag-spin { animation: ag-spin 9s linear infinite; }
+.ag-spin-slow { animation: ag-spin 60s linear infinite; }
+.ag-beam { animation: ag-beam 2.2s ease-in-out infinite; }
+.ag-twinkle { animation: ag-twinkle 4s ease-in-out infinite; }
+.ag-dash { animation: ag-dash 1.1s linear infinite; }
+.ag-breathe { animation: ag-breathe 3.4s ease-in-out infinite; }
+.ag-flow { animation: ag-chase 1.6s linear infinite; }
+.ag-icon-glow { animation: ag-icon-glow 2.6s ease-in-out infinite; }
+.ag-icon-pulse { animation: ag-icon-pulse 2.6s ease-in-out infinite; }
+.ag-sheen { transform-box: fill-box; animation: ag-sheen 3.6s ease-in-out infinite; }
+.ag-chase polygon { animation: ag-chase linear infinite; animation-duration: inherit; }
+.ag-chase { animation-duration: 4.5s; }
+.mic-live { animation: mic-ring 1.4s ease-out infinite; }
+.assistant-ring { animation: assistant-ring 1.6s ease-out infinite; }
+.stage-swap { animation: stage-swap 0.55s ease-out both; }
+.sparkle { animation: sparkle 1.4s ease-in-out infinite; filter: drop-shadow(0 0 6px #fde68a); }
+@media (prefers-reduced-motion: reduce) {
+  .ag-pulse, .ag-spin, .ag-spin-slow, .ag-beam, .ag-twinkle, .ag-dash, .ag-breathe, .ag-chase polygon, .ag-flow, .ag-icon-glow, .ag-icon-pulse, .mic-live, .assistant-ring, .stage-swap { animation: none; }
+  .sparkle { animation: none; opacity: 0.9; }
+  .ag-sheen { animation: none; display: none; }
+}

@@ -1,0 +1,1175 @@
+{
+  "name": "MCR AI Workforce",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mcr-ai-workforce",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "MCR Webhook Auth"
+        }
+      },
+      "webhookId": "mcr-ai-workforce"
+    },
+    {
+      "id": "validate-input",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body || {};\nconst errors = [];\nconst command = typeof b.command === 'string' ? b.command.trim() : (typeof b.prompt === 'string' ? b.prompt.trim() : '');\nif (command.length < 5 || command.length > 4000) errors.push('command must be 5-4000 characters');\nconst allowed = ['content', 'image', 'document', 'video'];\nconst agents = Array.isArray(b.agents) && b.agents.length ? [...new Set(b.agents)] : allowed;\nif (agents.some(a => !allowed.includes(a))) errors.push('agents must be a subset of ' + allowed.join(', '));\nconst budget = b.budget_limit_usd === undefined ? null : Number(b.budget_limit_usd);\nif (budget !== null && !(budget > 0 && budget <= 1000)) errors.push('budget_limit_usd must be between 0 and 1000');\nconst language = b.language === 'en' ? 'en' : 'th';\nconst aspect_ratio = b.aspect_ratio === '9:16' ? '9:16' : '16:9';\nconst requestId = typeof b.request_id === 'string' && b.request_id.length <= 100 ? b.request_id : $execution.id;\nconst payload = { command, agents, language, aspect_ratio, auto_start: false,\n  require_approval: b.require_approval !== false,\n  data_classification: ['public', 'internal', 'restricted'].includes(b.data_classification) ? b.data_classification : 'internal' };\nif (budget !== null) payload.budget_limit_usd = budget;\nreturn [{ json: { valid: errors.length === 0, errors, payload, idempotency_key: 'n8n-' + requestId } }];"
+      }
+    },
+    {
+      "id": "input-valid",
+      "name": "Input Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "respond-400",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        480
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: 'VALIDATION_ERROR', message: $json.errors.join('; ') } }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    },
+    {
+      "id": "submit-job",
+      "name": "Submit Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        280
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MCR_API_URL }}/v1/jobs",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $json.idempotency_key }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "MCR API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "respond-202",
+      "name": "Respond 202",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        200
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ job_id: $json.id, status: $json.status, status_url: '/v1/jobs/' + $json.id }) }}",
+        "options": {
+          "responseCode": 202
+        }
+      }
+    },
+    {
+      "id": "respond-502",
+      "name": "Respond 502",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        480
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: 'JOB_SUBMISSION_FAILED', message: 'The job could not be submitted to the MCR API' } }) }}",
+        "options": {
+          "responseCode": 502
+        }
+      }
+    },
+    {
+      "id": "invoke-planner",
+      "name": "Invoke Planner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MCR_API_URL }}/v1/jobs/{{ $('Submit Job').first().json.id }}/plan",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "MCR API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "wait-for-plan",
+      "name": "Wait For Plan",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1320,
+        200
+      ],
+      "parameters": {
+        "amount": 3,
+        "unit": "seconds"
+      },
+      "webhookId": "mcr-wait-plan"
+    },
+    {
+      "id": "get-plan-status",
+      "name": "Get Plan Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.MCR_API_URL }}/v1/jobs/{{ $('Submit Job').first().json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "MCR API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "plan-state",
+      "name": "Plan State",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        200
+      ],
+      "parameters": {
+        "jsCode": "const job = $input.first().json;\nconst polls = $runIndex + 1;\nreturn [{ json: { job_id: job.id, status: job.status, planned: job.status === 'planned' || job.status === 'running',\n  give_up: ['failed', 'cancelled'].includes(job.status) || polls >= 100,\n  error_code: job.error_code, error_message: job.error_message, polls } }];"
+      }
+    },
+    {
+      "id": "planned",
+      "name": "Planned?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.planned }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "planning-failed",
+      "name": "Planning Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
+        380
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.give_up }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "dispatch-tasks",
+      "name": "Dispatch Tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        180
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MCR_API_URL }}/v1/jobs/{{ $('Submit Job').first().json.id }}/dispatch",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "MCR API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "wait-for-agents",
+      "name": "Wait For Agents",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2420,
+        180
+      ],
+      "parameters": {
+        "amount": 10,
+        "unit": "seconds"
+      },
+      "webhookId": "mcr-wait-agents"
+    },
+    {
+      "id": "get-tasks",
+      "name": "Get Tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        180
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.MCR_API_URL }}/v1/jobs/{{ $('Submit Job').first().json.id }}/tasks",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "MCR API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "content-agent",
+      "name": "Content Agent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2880,
+        20
+      ],
+      "parameters": {
+        "jsCode": "// Observes the Celery-backed tasks of one agent. n8n does not run the agent: the queue does.\nconst terminal = ['succeeded','failed','skipped','cancelled'];\nconst tasks = $('Get Tasks').first().json.items.filter(t => t.agent === 'content');\nconst count = s => tasks.filter(t => t.status === s).length;\nreturn [{ json: { agent: 'content', total: tasks.length, succeeded: count('succeeded'), failed: count('failed'),\n  running: count('running'), queued: count('queued') + count('pending'),\n  done: tasks.every(t => terminal.includes(t.status)),\n  providers: [...new Set(tasks.map(t => t.provider).filter(Boolean))] } }];"
+      }
+    },
+    {
+      "id": "image-agent",
+      "name": "Image Agent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2880,
+        170
+      ],
+      "parameters": {
+        "jsCode": "// Observes the Celery-backed tasks of one agent. n8n does not run the agent: the queue does.\nconst terminal = ['succeeded','failed','skipped','cancelled'];\nconst tasks = $('Get Tasks').first().json.items.filter(t => t.agent === 'image');\nconst count = s => tasks.filter(t => t.status === s).length;\nreturn [{ json: { agent: 'image', total: tasks.length, succeeded: count('succeeded'), failed: count('failed'),\n  running: count('running'), queued: count('queued') + count('pending'),\n  done: tasks.every(t => terminal.includes(t.status)),\n  providers: [...new Set(tasks.map(t => t.provider).filter(Boolean))] } }];"
+      }
+    },
+    {
+      "id": "document-agent",
+      "name": "Document Agent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2880,
+        320
+      ],
+      "parameters": {
+        "jsCode": "// Observes the Celery-backed tasks of one agent. n8n does not run the agent: the queue does.\nconst terminal = ['succeeded','failed','skipped','cancelled'];\nconst tasks = $('Get Tasks').first().json.items.filter(t => t.agent === 'document');\nconst count = s => tasks.filter(t => t.status === s).length;\nreturn [{ json: { agent: 'document', total: tasks.length, succeeded: count('succeeded'), failed: count('failed'),\n  running: count('running'), queued: count('queued') + count('pending'),\n  done: tasks.every(t => terminal.includes(t.status)),\n  providers: [...new Set(tasks.map(t => t.provider).filter(Boolean))] } }];"
+      }
+    },
+    {
+      "id": "video-agent",
+      "name": "Video Agent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2880,
+        470
+      ],
+      "parameters": {
+        "jsCode": "// Observes the Celery-backed tasks of one agent. n8n does not run the agent: the queue does.\nconst terminal = ['succeeded','failed','skipped','cancelled'];\nconst tasks = $('Get Tasks').first().json.items.filter(t => t.agent === 'video');\nconst count = s => tasks.filter(t => t.status === s).length;\nreturn [{ json: { agent: 'video', total: tasks.length, succeeded: count('succeeded'), failed: count('failed'),\n  running: count('running'), queued: count('queued') + count('pending'),\n  done: tasks.every(t => terminal.includes(t.status)),\n  providers: [...new Set(tasks.map(t => t.provider).filter(Boolean))] } }];"
+      }
+    },
+    {
+      "id": "merge-agent-status",
+      "name": "Merge Agent Status",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        3120,
+        240
+      ],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 4
+      }
+    },
+    {
+      "id": "get-job",
+      "name": "Get Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3340,
+        240
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.MCR_API_URL }}/v1/jobs/{{ $('Submit Job').first().json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "MCR API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "job-progress",
+      "name": "Job Progress",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3560,
+        240
+      ],
+      "parameters": {
+        "jsCode": "const job = $input.first().json;\nconst agents = $('Merge Agent Status').all().map(i => i.json);\nconst finished = ['awaiting_approval', 'completed', 'partial', 'failed', 'cancelled', 'rejected'].includes(job.status);\nconst polls = $runIndex + 1;\nreturn [{ json: { job_id: job.id, status: job.status, progress: job.progress, finished, timed_out: !finished && polls >= 360,\n  stop: finished || polls >= 360, demo_mode: job.demo_mode, error_code: job.error_code, agents, polls } }];"
+      }
+    },
+    {
+      "id": "job-finished",
+      "name": "Job Finished?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3780,
+        240
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.stop }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "qa-coordination",
+      "name": "QA Coordination",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4000,
+        220
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.MCR_API_URL }}/v1/jobs/{{ $('Submit Job').first().json.id }}/qa",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "MCR API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "build-summary",
+      "name": "Build Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4220,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const p = $('Job Progress').last().json;\nconst qa = $input.first().json;\nconst warnings = (qa.checks || []).filter(c => c.status !== 'pass').map(c => c.name + ': ' + c.detail);\nconst text = p.timed_out\n  ? `MCR AI Workforce: job ${p.job_id} is still ${p.status} after ${p.polls} checks. It keeps running; see the dashboard.`\n  : `MCR AI Workforce: job ${p.job_id} finished with status ${p.status}` + (p.demo_mode ? ' (DEMO output, not AI-generated)' : '')\n    + `. QA: ${qa.verdict || 'n/a'}.` + (p.status === 'awaiting_approval' ? ' Approval is required in the dashboard.' : '');\nreturn [{ json: { job_id: p.job_id, status: p.status, timed_out: p.timed_out, demo_mode: p.demo_mode, qa_verdict: qa.verdict,\n  qa_summary: qa.summary, warnings, agents: p.agents, text } }];"
+      }
+    },
+    {
+      "id": "job-status-update",
+      "name": "Job Status Update",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4440,
+        220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MCR_API_URL }}/v1/jobs/{{ $('Submit Job').first().json.id }}/events",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ action: $('Build Summary').first().json.timed_out ? 'n8n.monitor_timeout' : 'n8n.workflow_completed', detail: { status: $('Build Summary').first().json.status, qa_verdict: $('Build Summary').first().json.qa_verdict, execution_id: $execution.id } }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "MCR API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "notify-configured",
+      "name": "Notify Configured?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4660,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ !!$env.MCR_NOTIFY_WEBHOOK_URL }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "completion-notification",
+      "name": "Completion Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4880,
+        140
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MCR_NOTIFY_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $('Build Summary').first().json.text, job: $('Build Summary').first().json }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "done",
+      "name": "Done",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        5100,
+        220
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "build-failure-report",
+      "name": "Build Failure Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        520
+      ],
+      "parameters": {
+        "jsCode": "const j = $input.first().json || {};\nreturn [{ json: { job_id: j.job_id || $('Submit Job').first().json.id, status: j.status || 'unknown',\n  text: 'MCR AI Workforce: workflow stopped for job ' + (j.job_id || $('Submit Job').first().json.id)\n    + ' (' + (j.error_code || j.status || 'API call failed after retries') + '). The job state in the dashboard is authoritative.' } }];"
+      }
+    },
+    {
+      "id": "failure-notification",
+      "name": "Failure Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2660,
+        520
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MCR_NOTIFY_WEBHOOK_URL || $env.MCR_API_URL + '/health/live' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.text, job: $json }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Input Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Valid?": {
+      "main": [
+        [
+          {
+            "node": "Submit Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submit Job": {
+      "main": [
+        [
+          {
+            "node": "Respond 202",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 502",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond 202": {
+      "main": [
+        [
+          {
+            "node": "Invoke Planner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Invoke Planner": {
+      "main": [
+        [
+          {
+            "node": "Wait For Plan",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Failure Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait For Plan": {
+      "main": [
+        [
+          {
+            "node": "Get Plan Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Plan Status": {
+      "main": [
+        [
+          {
+            "node": "Plan State",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Failure Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan State": {
+      "main": [
+        [
+          {
+            "node": "Planned?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Planned?": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Planning Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Planning Failed?": {
+      "main": [
+        [
+          {
+            "node": "Build Failure Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait For Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch Tasks": {
+      "main": [
+        [
+          {
+            "node": "Wait For Agents",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Failure Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait For Agents": {
+      "main": [
+        [
+          {
+            "node": "Get Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Tasks": {
+      "main": [
+        [
+          {
+            "node": "Content Agent",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Image Agent",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Document Agent",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Video Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Failure Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Content Agent": {
+      "main": [
+        [
+          {
+            "node": "Merge Agent Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Image Agent": {
+      "main": [
+        [
+          {
+            "node": "Merge Agent Status",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Document Agent": {
+      "main": [
+        [
+          {
+            "node": "Merge Agent Status",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Video Agent": {
+      "main": [
+        [
+          {
+            "node": "Merge Agent Status",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Merge Agent Status": {
+      "main": [
+        [
+          {
+            "node": "Get Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Job": {
+      "main": [
+        [
+          {
+            "node": "Job Progress",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Failure Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Job Progress": {
+      "main": [
+        [
+          {
+            "node": "Job Finished?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Job Finished?": {
+      "main": [
+        [
+          {
+            "node": "QA Coordination",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait For Agents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "QA Coordination": {
+      "main": [
+        [
+          {
+            "node": "Build Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Failure Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Summary": {
+      "main": [
+        [
+          {
+            "node": "Job Status Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Job Status Update": {
+      "main": [
+        [
+          {
+            "node": "Notify Configured?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Configured?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Configured?": {
+      "main": [
+        [
+          {
+            "node": "Completion Notification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Completion Notification": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Failure Report": {
+      "main": [
+        [
+          {
+            "node": "Failure Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "executionTimeout": 7200
+  },
+  "active": false,
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

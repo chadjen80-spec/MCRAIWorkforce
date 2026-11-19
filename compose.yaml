@@ -1,0 +1,192 @@
+# MCR AI Workforce — LOCAL DEVELOPMENT stack.
+#   copy .env.example to .env, fill in the values, then:  docker compose up -d --build
+# Production: see compose.prod.yaml and docs/PRODUCTION_CHECKLIST.md
+name: mcr-ai-workforce
+
+x-api-env: &api-env
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-mcr}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-mcr}
+  CELERY_BROKER_URL: redis://redis:6379/0
+  REDIS_URL: redis://redis:6379/1
+  STORAGE_BACKEND: s3
+  S3_ENDPOINT_URL: http://minio:9000
+  S3_ACCESS_KEY: ${MINIO_ROOT_USER:-mcr}
+  S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+  S3_BUCKET: ${S3_BUCKET:-mcr-artifacts}
+  JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+  SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:?set SECRETS_ENCRYPTION_KEY in .env}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+  DEMO_MODE: ${DEMO_MODE:-false}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+  OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+  OPENAI_IMAGE_MODEL: ${OPENAI_IMAGE_MODEL:-gpt-image-2}
+  OPENAI_TTS_MODEL: ${OPENAI_TTS_MODEL:-gpt-4o-mini-tts}
+  ASSISTANT_TTS_VOICE: ${ASSISTANT_TTS_VOICE:-nova}
+  COMFYUI_URL: ${COMFYUI_URL:-}
+  COMFYUI_CHECKPOINT: ${COMFYUI_CHECKPOINT:-sd_xl_base_1.0.safetensors}
+  BOOTSTRAP_ORG_NAME: ${BOOTSTRAP_ORG_NAME:-MCR Technology}
+  BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+  BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+
+x-api-base: &api-base
+  build:
+    context: .
+    dockerfile: infrastructure/docker/api.Dockerfile
+  image: mcr-ai-workforce-api:${APP_VERSION:-dev}
+  environment: *api-env
+  restart: unless-stopped
+  networks: [backend, egress]
+  extra_hosts:
+    - "host.docker.internal:host-gateway"   # reach ComfyUI running on the Windows host GPU
+  depends_on:
+    migrate: { condition: service_completed_successfully }
+
+x-worker-health: &worker-health
+  test: ["CMD-SHELL", "celery -A app.worker.celery_app inspect ping -d $$WORKER_NAME@$$HOSTNAME --timeout 5 | grep -q pong"]
+  interval: 30s
+  timeout: 15s
+  retries: 3
+  start_period: 30s
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:17-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mcr}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-mcr}
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: ${REDIS_IMAGE:-redis:7-alpine}
+    restart: unless-stopped
+    # AOF persistence: queued task messages survive a Redis restart.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes: [redis-data:/data]
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: ${MINIO_IMAGE:-minio/minio:latest}   # production must pin a release
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-mcr}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+    volumes: [minio-data:/data]
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/api.Dockerfile
+    image: mcr-ai-workforce-api:${APP_VERSION:-dev}
+    environment: *api-env
+    restart: "no"
+    networks: [backend]
+    command: ["sh", "-c", "alembic upgrade head && (python -m app.cli seed || true)"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
+
+  api:
+    <<: *api-base
+    ports: ["${BIND_ADDRESS:-127.0.0.1}:8000:8000"]   # localhost only (OpenAPI docs at /docs)
+
+  # One Celery worker per queue group so heavy work never starves light work.
+  worker-core:
+    <<: *api-base
+    command: ["celery", "-A", "app.worker.celery_app", "worker", "-n", "core@%h", "-Q", "planner,content,document,qa", "-c", "4", "-l", "INFO"]
+    environment:
+      <<: *api-env
+      WORKER_NAME: core
+    healthcheck: *worker-health
+
+  worker-image:
+    <<: *api-base
+    command: ["celery", "-A", "app.worker.celery_app", "worker", "-n", "image@%h", "-Q", "image", "-c", "2", "-l", "INFO"]
+    environment:
+      <<: *api-env
+      WORKER_NAME: image
+    healthcheck: *worker-health
+
+  worker-video:
+    <<: *api-base
+    command: ["celery", "-A", "app.worker.celery_app", "worker", "-n", "video@%h", "-Q", "video", "-c", "1", "-l", "INFO"]
+    environment:
+      <<: *api-env
+      WORKER_NAME: video
+    healthcheck: *worker-health
+
+  # Reaper: lease-expiry recovery every 30s (embedded beat schedules it, this worker runs it).
+  worker-maintenance:
+    <<: *api-base
+    command: ["celery", "-A", "app.worker.celery_app", "worker", "-n", "maint@%h", "-Q", "maintenance", "-c", "1", "-B", "-s", "/tmp/celerybeat-schedule", "-l", "INFO"]
+    environment:
+      <<: *api-env
+      WORKER_NAME: maint
+    healthcheck: *worker-health
+
+  web:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/web.Dockerfile
+    image: mcr-ai-workforce-web:${APP_VERSION:-dev}
+    restart: unless-stopped
+    environment:
+      API_INTERNAL_URL: http://api:8000
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}   # plain HTTP on localhost; production sets true
+    depends_on:
+      api: { condition: service_healthy }
+    networks: [backend, egress]
+    ports: ["${BIND_ADDRESS:-127.0.0.1}:3000:3000"]
+
+  n8n:
+    image: ${N8N_IMAGE:-n8nio/n8n:latest}   # production must pin a release
+    restart: unless-stopped
+    environment:
+      N8N_HOST: ${N8N_DOMAIN:-localhost}
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
+      WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://localhost:5678/}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?set N8N_ENCRYPTION_KEY in .env}
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"   # the workflow reads MCR_API_URL / MCR_NOTIFY_WEBHOOK_URL
+      MCR_API_URL: http://api:8000
+      MCR_NOTIFY_WEBHOOK_URL: ${MCR_NOTIFY_WEBHOOK_URL:-}
+      GENERIC_TIMEZONE: Asia/Bangkok
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - ./n8n/workflows:/workflows:ro
+    networks: [backend, egress]
+    ports: ["${BIND_ADDRESS:-127.0.0.1}:5678:5678"]
+    depends_on:
+      api: { condition: service_healthy }
+
+networks:
+  backend:
+    internal: true     # no route to the internet or the host: PostgreSQL, Redis and MinIO live only here
+  egress: {}           # outbound access for services that call AI providers or are published
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  n8n-data:
