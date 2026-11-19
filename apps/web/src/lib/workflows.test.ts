@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { dictionaries } from "@/i18n/dictionaries";
-import type { DashboardSummary } from "./types";
+import type { DashboardSummary, Job } from "./types";
 import { PLANNED, WORKFLOWS, isFirstRun, offlineFor, suggestTasks, workflowById } from "./workflows";
 
 function summary(over: Partial<DashboardSummary> = {}): DashboardSummary {
@@ -77,6 +77,27 @@ describe("suggestTasks: what Mira suggests next", () => {
   it("returns nothing before the summary has loaded, and respects the limit", () => {
     expect(suggestTasks(null)).toEqual([]);
     expect(suggestTasks(summary({ awaiting_approval_jobs: 1, failed_jobs: 1, offline_queues: ["qa"], month_cost_usd: 99 }), 2)).toHaveLength(2);
+  });
+
+  it("links straight to the one job waiting for approval", () => {
+    const waiting = { id: "j9", status: "awaiting_approval", command: "quotation for ACME" } as unknown as Job;
+    const [first] = suggestTasks(summary({ awaiting_approval_jobs: 1 }), 4, { jobs: [waiting] });
+    expect(first).toMatchObject({ id: "review", href: "/jobs/j9", label: "suggest.reviewOne" });
+  });
+
+  it("offers to watch a running job unless it is already on Mira's screen", () => {
+    const running = { id: "r1", status: "running", command: "2 images" } as unknown as Job;
+    expect(suggestTasks(summary(), 10, { jobs: [running] }).find((x) => x.watchJobId)).toMatchObject({ watchJobId: "r1" });
+    expect(suggestTasks(summary(), 10, { jobs: [running], watchingJobId: "r1" }).some((x) => x.watchJobId)).toBe(false);
+  });
+
+  it("offers to send the newest failed command again, or the failed list when its agents are offline", () => {
+    const failed = { id: "f1", status: "failed", command: "A 30-second short video for X", requested_agents: ["video"] } as unknown as Job;
+    const retry = suggestTasks(summary({ failed_jobs: 1 }), 10, { jobs: [failed] }).find((x) => x.retryCommand);
+    expect(retry).toMatchObject({ retryCommand: "A 30-second short video for X", tone: "warn" });
+    const down = suggestTasks(summary({ failed_jobs: 1, offline_queues: ["video"] }), 10, { jobs: [failed] });
+    expect(down.some((x) => x.retryCommand)).toBe(false);
+    expect(down.find((x) => x.id === "failed")).toMatchObject({ href: "/jobs?status=failed" });
   });
 
   it("does not divide by a zero budget", () => {

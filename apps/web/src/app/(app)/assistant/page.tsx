@@ -8,6 +8,7 @@ import { AssistantAvatar, type AvatarMode } from "@/components/AssistantAvatar";
 import { ChatBubbles } from "@/components/PosterChat";
 import { LogoUploadButton } from "@/components/LogoUploadButton";
 import { CommandComposer } from "@/components/assistant/CommandComposer";
+import { FocusStrip, ModeToggle } from "@/components/assistant/ModeToggle";
 import { OpsSummary, StartGuide, TaskSuggestions } from "@/components/assistant/OpsPanel";
 import { QuickActions } from "@/components/assistant/QuickActions";
 import { Button, DemoBadge, buttonClass, cx } from "@/components/ui";
@@ -31,14 +32,15 @@ import {
   withSponsors,
   withTemplate,
 } from "@/lib/poster";
+import { workforceBriefing } from "@/lib/briefing";
+import { useLayoutMode } from "@/lib/layoutMode";
+import { liveJobs, useOnline, useOpsSnapshot, waitingJobs } from "@/lib/opsSnapshot";
 import type {
   Artifact,
   BrandAsset,
-  DashboardSummary,
   ItemList,
   Job,
   JobStatus,
-  Paginated,
   PosterSpec,
   PosterTemplate,
   Session,
@@ -54,25 +56,6 @@ import { isFirstRun, workflowById, type Workflow, type WorkflowId } from "@/lib/
 // because a job can spend money. Typing works everywhere as a fallback.
 
 const SETTLED: readonly JobStatus[] = ["awaiting_approval", "completed", "partial", "failed", "cancelled", "rejected"];
-
-/** The spoken welcome: greets the user by first name and reviews the workforce right now. */
-function workforceBriefing(
-  t: (key: MessageKey, vars?: Record<string, string>) => string,
-  firstName: string,
-  s: DashboardSummary | null,
-): string {
-  const parts = [firstName ? t("brief.hello", { name: firstName }) : t("brief.helloNoName")];
-  if (s) {
-    const busy: string[] = [];
-    if (s.active_jobs > 0) busy.push(t("brief.running", { n: String(s.active_jobs) }));
-    if (s.awaiting_approval_jobs > 0) busy.push(t("brief.awaiting", { n: String(s.awaiting_approval_jobs) }));
-    if (s.failed_jobs > 0) busy.push(t("brief.failed", { n: String(s.failed_jobs) }));
-    parts.push(busy.length ? t("brief.status", { items: busy.join(" ") }) : t("brief.idle"));
-    parts.push(t("brief.spend", { spent: s.month_cost_usd.toFixed(2), budget: s.monthly_budget_usd.toFixed(0) }));
-    if ((s.offline_queues?.length ?? 0) > 0) parts.push(t("brief.workersDown"));
-  }
-  return parts.join(" ");
-}
 
 export default function AssistantPage() {
   const { t, locale } = useI18n();
@@ -131,15 +114,11 @@ export default function AssistantPage() {
   const job = monitor.data?.job;
   const settled = job ? SETTLED.includes(job.status) : false;
 
-  // --- operations overview (side panel) ---------------------------------------------------
-  const summary = useApi<DashboardSummary>("assistant:summary", (signal) => api<DashboardSummary>("/v1/dashboard/summary", { signal }), {
-    interval: 15000,
-  });
-  const waiting = useApi<Paginated<Job>>(
-    "assistant:waiting",
-    (signal) => api<Paginated<Job>>("/v1/jobs", { query: { status: "awaiting_approval", limit: 3 }, signal }),
-    { interval: 15000 },
-  );
+  // --- operations overview -----------------------------------------------------------------
+  // One shared snapshot feeds the welcome briefing, the operations panel and the suggestions.
+  const ops = useOpsSnapshot();
+  const online = useOnline();
+  const [layout, setLayout] = useLayoutMode();
   const composerRef = useRef<HTMLTextAreaElement>(null);
   // Set when a quick action filled the composer: shows what to add before sending.
   const [filled, setFilled] = useState(false);
@@ -312,13 +291,15 @@ export default function AssistantPage() {
   const welcome = async (signal: AbortSignal, closing: MessageKey): Promise<boolean> => {
     welcomed.current = true;
     setMode("thinking");
-    const [me, summary] = await Promise.all([
+    // The briefing quotes the same snapshot the operations panel shows (a fresh one is shared by both),
+    // so Mira never says different job counts or budget figures from the ones on screen.
+    const [me, snapshot] = await Promise.all([
       api<Session>("/v1/auth/me", { signal }).catch(() => null),
-      api<DashboardSummary>("/v1/dashboard/summary", { signal }).catch(() => null),
+      ops.get(15000),
     ]);
     if (signal.aborted) return false;
     const firstName = (me?.user.full_name ?? "").trim().split(/\s+/)[0] ?? "";
-    await say(`${workforceBriefing(t, firstName, summary)} ${t(closing)}`.trim(), signal);
+    await say(`${workforceBriefing(t, firstName, snapshot?.summary)} ${t(closing)}`.trim(), signal);
     return !signal.aborted;
   };
   // Opening Mira's screen: she says the welcome straight away when the browser lets the page talk
@@ -404,9 +385,17 @@ export default function AssistantPage() {
   });
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.code !== "Space" || e.repeat) return;
+      if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
-      if (el && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(el.tagName))) return;
+      const typing = el && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName));
+      // "/" jumps to the command box from anywhere on the page (except while typing somewhere).
+      if (e.key === "/" && !typing) {
+        e.preventDefault();
+        composerRef.current?.focus();
+        return;
+      }
+      if (e.code !== "Space") return;
+      if (typing || el?.tagName === "BUTTON" || el?.tagName === "A") return;
       e.preventDefault();
       talkRef.current();
     };
@@ -437,15 +426,32 @@ export default function AssistantPage() {
     }
     setTyped(t(w.command));
     setFilled(true);
+    focusComposer();
+  };
+  const focusComposer = () => {
     const box = composerRef.current;
-    if (box) {
-      const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-      box.scrollIntoView({ block: "center", behavior: still ? "auto" : "smooth" });
-      box.focus({ preventScroll: true });
-      requestAnimationFrame(() => box.setSelectionRange(box.value.length, box.value.length));
-    }
+    if (!box) return;
+    const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    box.scrollIntoView({ block: "center", behavior: still ? "auto" : "smooth" });
+    box.focus({ preventScroll: true });
+    requestAnimationFrame(() => box.setSelectionRange(box.value.length, box.value.length));
   };
   const startSuggested = (id: WorkflowId) => void pickWorkflow(workflowById(id));
+  // A failed job's command goes back into the composer; it is confirmed again before anything runs.
+  const retryCommand = (command: string) => {
+    if (posterMode) return;
+    setTyped(command);
+    setFilled(false);
+    focusComposer();
+  };
+  // Show a job that is already running (started here, by n8n or elsewhere) on Mira's screen: the stage
+  // switches to the live agent graph, exactly as for a job started from this page.
+  const watchJob = (id: string) => {
+    if (posterMode) return;
+    setPending(null);
+    setJobId(id);
+  };
+  const backToMira = () => setJobId(null);
   const createPosterNow = async () => {
     const signal = begin();
     await createPoster(signal);
@@ -548,8 +554,7 @@ export default function AssistantPage() {
     const failure = finished.status === "failed" || finished.status === "partial";
     if (success) setCelebrate(true);
     if (failure) setSorry(true);
-    summary.reload();
-    waiting.reload();
+    void ops.refresh();
     await say(text, signal);
     end(signal);
     // hold the expression for a moment after she finishes speaking
@@ -578,12 +583,26 @@ export default function AssistantPage() {
     [],
   );
 
+  const progressCaption = mode !== "listening" && Boolean(job && !settled && mode !== "speaking");
   const caption =
     mode === "listening"
       ? heard || t("assistant.listening")
-      : job && !settled && mode !== "speaking"
+      : progressCaption && job
         ? t("assistant.working", { n: Math.round(job.progress) })
         : (bubble ?? t("assistant.idle"));
+
+  // Announce the watched job's status to screen readers when it changes (with the progress at that moment).
+  const [jobAnnouncement, setJobAnnouncement] = useState("");
+  const jobStatusKey = job ? `${job.id}:${job.status}` : "";
+  const jobRef = useRef(job);
+  useEffect(() => {
+    jobRef.current = job;
+  });
+  useEffect(() => {
+    const j = jobRef.current;
+    setJobAnnouncement(j ? t("assistant.jobStatus", { status: t(`status.${j.status}`), n: String(Math.round(j.progress)) }) : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only on a status change, not every progress tick
+  }, [jobStatusKey]);
 
   // Full screen: the whole assistant (stage and controls) fills the screen; Esc or the button leaves it.
   // Where the browser refuses real full screen (iPhone Safari, embedded views), it fills the window instead.
@@ -628,19 +647,52 @@ export default function AssistantPage() {
   const posterStage = posterMode && !graphStage;
   const sideStage = graphStage || posterStage;
 
-  const s = summary.data;
+  const snap = ops.snapshot;
+  const s = snap?.summary;
   const firstRun = isFirstRun(s);
+  const focus = layout === "focus";
+  const live = liveJobs(snap);
+  const waitingList = waitingJobs(snap);
+  // Mira's size follows the layout: large in Focus, moderate beside the dashboard in Work.
+  const stageSize = focus
+    ? "h-[48vh] min-h-[300px] max-h-[680px] sm:h-[56vh]"
+    : "h-[34vh] min-h-[240px] max-h-[460px] md:h-[40vh]";
   return (
-    <div lang={locale} className="assistant-page mx-auto max-w-7xl">
-      <header className="mb-4 flex flex-wrap items-end justify-between gap-2">
+    <div lang={locale} className={cx("assistant-page mx-auto", focus ? "max-w-4xl" : "max-w-7xl")}>
+      <a
+        href="#assistant-typed"
+        onClick={(e) => {
+          e.preventDefault();
+          composerRef.current?.focus();
+        }}
+        className="sr-only focus:not-sr-only focus:mb-3 focus:inline-block focus:rounded-lg focus:bg-raised focus:px-3 focus:py-2 focus:text-sm focus:text-ink"
+      >
+        {t("assistant.jumpToComposer")}
+      </a>
+      <header className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-2xl font-bold leading-tight text-ink">{t("assistant.name")}</h1>
           <p className="mt-1 text-base leading-relaxed text-dim">{t("assistant.subtitle")}</p>
         </div>
+        <ModeToggle mode={layout} onChange={setLayout} />
       </header>
-      {/* Phone order: Mira and the composer, then what needs attention, then quick actions.
-          Desktop: the operations panel sits in a right-hand column beside both. */}
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)] lg:grid-rows-[auto_1fr]">
+      {!online && (
+        <p role="status" className="mb-4 rounded-xl border border-warn/50 bg-warn/10 p-3 text-sm leading-relaxed text-ink">
+          {t("ops.offline")}
+        </p>
+      )}
+      {/* Screen-reader updates for the job on Mira's screen: status changes only, not every percent. */}
+      <p className="sr-only" aria-live="polite">
+        {jobAnnouncement}
+      </p>
+      {focus && s && (
+        <div className="mb-4">
+          <FocusStrip waiting={s.awaiting_approval_jobs} live={live.length} onShowDashboard={() => setLayout("work")} />
+        </div>
+      )}
+      {/* Work layout. Phone: Mira and the composer, then what needs attention, then quick actions.
+          Tablet: the operations panels sit side by side. Desktop: they form a right-hand column. */}
+      <div className={cx("grid gap-6", !focus && "lg:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)] lg:grid-rows-[auto_1fr]")}>
       <div className="min-w-0 lg:col-start-1 lg:row-start-1">
     <div
       ref={screenRef}
@@ -683,7 +735,7 @@ export default function AssistantPage() {
             mode === "listening" && !sideStage ? "border-cyan/70 opacity-100 assistant-ring" : "border-white/40 opacity-0",
           )}
         />
-        {celebrate && <Sparkles corner={sideStage} />}
+        {celebrate && <Sparkles corner={sideStage} size={stageSize} />}
         <AssistantAvatar
           mode={mode}
           happy={celebrate}
@@ -693,7 +745,7 @@ export default function AssistantPage() {
               ? "stage-swap absolute right-0 top-0 z-10 h-40 w-32 sm:h-56 sm:w-52"
               : fullScreen
                 ? "relative min-h-[300px] w-full flex-1"
-                : "relative h-[52vh] min-h-[340px] max-h-[560px] w-full",
+                : cx("relative w-full", stageSize),
           )}
         />
 
@@ -722,7 +774,8 @@ export default function AssistantPage() {
           >
             <StatusIcon mode={mode} />
           </span>
-          <p aria-live="polite" className="min-w-0 flex-1 whitespace-pre-wrap text-base leading-relaxed sm:text-lg">
+          {/* Mira's words are announced; the "Working… n%" ticker is not (the status line above is). */}
+          <p aria-live={progressCaption ? "off" : "polite"} className="min-w-0 flex-1 whitespace-pre-wrap text-base leading-relaxed sm:text-lg">
             {caption}
           </p>
         </div>
@@ -856,14 +909,19 @@ export default function AssistantPage() {
         {graphStage && (
           <div className={cx("stage-swap relative px-3 pb-3 sm:px-6 sm:pb-6", fullScreen && "flex min-h-0 flex-1 flex-col")}>
             <div className="mb-2 mr-32 flex min-h-9 flex-wrap items-center gap-2 text-sm font-semibold text-slate-800 sm:mr-52">
-              {t("graph.title")}
+              <h2 className="text-sm font-semibold">{t("graph.title")}</h2>
               {job && <JobStatusBadge status={job.status} />}
               {job?.demo_mode && <DemoBadge />}
-              {job && (
-                <Link href={`/jobs/${job.id}`} className={cx(buttonClass("secondary", "sm"), "ml-auto")}>
-                  {t("assistant.openJob")}
-                </Link>
-              )}
+              <span className="ml-auto flex flex-wrap gap-2">
+                <button type="button" onClick={backToMira} className={buttonClass("ghost", "sm")}>
+                  {t("graph.back")}
+                </button>
+                {job && (
+                  <Link href={`/jobs/${job.id}`} className={buttonClass("secondary", "sm")}>
+                    {t("assistant.openJob")}
+                  </Link>
+                )}
+              </span>
             </div>
             {showPosterResult && (posterResult.data ?? []).length > 0 && (
               <div className="mb-3 flex flex-wrap items-end gap-3 rounded-xl border border-line bg-[#050912] p-3">
@@ -894,7 +952,7 @@ export default function AssistantPage() {
             data-talk="1"
             onClick={talkButton}
             className={cx(
-              "flex size-32 flex-col items-center justify-center gap-1 rounded-full text-sm font-bold text-white shadow-xl transition focus-visible:outline-offset-4",
+              "flex size-28 flex-col items-center justify-center gap-1 rounded-full text-sm font-bold text-white shadow-xl transition focus-visible:outline-offset-4 sm:size-32",
               mode === "speaking"
                 ? "mic-live bg-gradient-to-br from-brand to-cyan hover:scale-105"
                 : busy
@@ -940,24 +998,48 @@ export default function AssistantPage() {
             note={filled ? t("composer.filled") : undefined}
           />
           <p className="text-sm leading-relaxed text-dim">{t("assistant.hint")}</p>
+          <p className="hidden text-sm leading-relaxed text-dim md:block">{t("assistant.keys")}</p>
         </div>
       </div>
     </div>
 
       </div>
 
-      <aside aria-label={t("ops.title")} className="space-y-4 lg:sticky lg:top-4 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:self-start">
-        {firstRun && <StartGuide />}
+      {!focus && (
+      <aside
+        aria-label={t("ops.title")}
+        className="grid gap-4 md:grid-cols-2 md:items-start lg:sticky lg:top-4 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:grid-cols-1 lg:self-start"
+      >
+        {firstRun && (
+          <div className="md:col-span-2 lg:col-span-1">
+            <StartGuide />
+          </div>
+        )}
         <OpsSummary
           summary={s}
-          waiting={waiting.data?.items}
-          waitingTotal={waiting.data?.total}
-          failed={summary.error !== undefined}
+          waiting={waitingList.slice(0, 3)}
+          waitingTotal={s?.awaiting_approval_jobs}
+          live={live}
+          loading={ops.loading}
+          error={ops.error}
+          takenAt={snap?.at}
+          onRetry={() => void ops.refresh()}
+          onWatch={posterMode ? undefined : watchJob}
+          watchingJobId={jobId}
         />
-        <TaskSuggestions summary={s} onStart={startSuggested} disabled={posterMode} />
+        <TaskSuggestions
+          summary={s}
+          onStart={startSuggested}
+          disabled={posterMode}
+          jobs={snap?.jobs}
+          watchingJobId={jobId}
+          onWatch={watchJob}
+          onRetry={retryCommand}
+        />
       </aside>
+      )}
 
-      {!fullScreen && (
+      {!fullScreen && !focus && (
         <div className="min-w-0 lg:col-start-1 lg:row-start-2">
           <QuickActions
             onPick={(w) => void pickWorkflow(w)}
@@ -973,7 +1055,7 @@ export default function AssistantPage() {
 }
 
 /** Twinkling stars around Mira while she celebrates. */
-function Sparkles({ corner }: { corner: boolean }) {
+function Sparkles({ corner, size }: { corner: boolean; size: string }) {
   const spots = corner
     ? [
         [6, 10, 16, 0],
@@ -992,7 +1074,7 @@ function Sparkles({ corner }: { corner: boolean }) {
   return (
     <div
       aria-hidden="true"
-      className={cx("pointer-events-none absolute z-20", corner ? "right-0 top-0 h-40 w-32 sm:h-56 sm:w-52" : "inset-x-0 top-0 h-[52vh] min-h-[340px] max-h-[560px]")}
+      className={cx("pointer-events-none absolute z-20", corner ? "right-0 top-0 h-40 w-32 sm:h-56 sm:w-52" : cx("inset-x-0 top-0", size))}
     >
       {spots.map(([x, y, size, delay]) => (
         <svg

@@ -6,7 +6,8 @@
 // Quote-to-Cash) are listed separately as PLANNED and are never rendered as working actions.
 
 import type { MessageKey } from "@/i18n/dictionaries";
-import type { DashboardSummary } from "./types";
+import { budgetFigures } from "./briefing";
+import type { DashboardSummary, Job } from "./types";
 
 /** Agent queues as reported by the API's worker heartbeats (`offline_queues`). */
 export type AgentQueue = "planner" | "content" | "image" | "document" | "video" | "qa";
@@ -61,11 +62,18 @@ export interface Suggestion {
   tone: "action" | "warn" | "info";
   label: MessageKey;
   vars?: Record<string, string>;
-  /** A page to open... */
+  /** A suggestion does at most one thing: open a page... */
   href?: string;
-  /** ...or a quick action to start. A suggestion has at most one of the two. */
+  /** ...start a quick action... */
   workflow?: WorkflowId;
+  /** ...show a running job's live progress on Mira's screen... */
+  watchJobId?: string;
+  /** ...or put a failed job's command back in the composer (it is confirmed again before it runs). */
+  retryCommand?: string;
 }
+
+const LIVE: readonly string[] = ["queued", "planning", "planned", "running", "cancelling"];
+const short = (text: string, n = 48) => (text.length > n ? `${text.slice(0, n - 1).trimEnd()}…` : text);
 
 /** True when the organisation has never run a job (nothing to review, nothing in history). */
 export function isFirstRun(s: DashboardSummary | null | undefined): boolean {
@@ -74,28 +82,41 @@ export function isFirstRun(s: DashboardSummary | null | undefined): boolean {
 }
 
 /**
- * What Mira suggests next, most urgent first: things waiting on you, then problems, then a useful next
- * job based on what the team has produced and which agents are online. At most `max` items.
+ * What Mira suggests next, most urgent first: things waiting on you, live work, problems, then a useful
+ * next job based on what the team has produced and which agents are online. At most `max` items.
+ * `jobs` are the listed jobs from the operations snapshot; `watchingJobId` is the job already on screen.
  */
-export function suggestTasks(s: DashboardSummary | null | undefined, max = 4): Suggestion[] {
+export function suggestTasks(
+  s: DashboardSummary | null | undefined,
+  max = 4,
+  { jobs = [], watchingJobId = null }: { jobs?: readonly Job[]; watchingJobId?: string | null } = {},
+): Suggestion[] {
   if (!s) return [];
   const out: Suggestion[] = [];
   const offline = s.offline_queues ?? [];
   const runnable = (id: WorkflowId) => offlineFor(workflowById(id), offline).length === 0;
 
-  if (s.awaiting_approval_jobs > 0)
+  const waiting = jobs.filter((j) => j.status === "awaiting_approval");
+  if (s.awaiting_approval_jobs === 1 && waiting.length === 1)
+    out.push({ id: "review", tone: "action", label: "suggest.reviewOne", vars: { cmd: short(waiting[0].command) }, href: `/jobs/${waiting[0].id}` });
+  else if (s.awaiting_approval_jobs > 0)
     out.push({ id: "review", tone: "action", label: "suggest.review", vars: { n: String(s.awaiting_approval_jobs) }, href: "/jobs?status=awaiting_approval" });
-  if (s.failed_jobs > 0)
+
+  const live = jobs.find((j) => LIVE.includes(j.status) && j.id !== watchingJobId);
+  if (live) out.push({ id: `watch-${live.id}`, tone: "action", label: "suggest.watch", vars: { cmd: short(live.command) }, watchJobId: live.id });
+
+  // The newest failed job can be sent again (when the agents it asked for are online); older failures
+  // are reached through the filtered list.
+  const failed = jobs.find((j) => j.status === "failed" || j.status === "partial");
+  const failedAgentsDown = failed ? [...SHARED, ...(failed.requested_agents ?? [])].some((q) => offline.includes(q)) : false;
+  if (failed && !failedAgentsDown)
+    out.push({ id: `retry-${failed.id}`, tone: "warn", label: "suggest.retry", vars: { cmd: short(failed.command) }, retryCommand: failed.command });
+  else if (s.failed_jobs > 0)
     out.push({ id: "failed", tone: "warn", label: "suggest.failed", vars: { n: String(s.failed_jobs) }, href: "/jobs?status=failed" });
   if (offline.length > 0) out.push({ id: "offline", tone: "warn", label: "suggest.offline", vars: { queues: offline.join(", ") } });
-  if (s.monthly_budget_usd > 0 && s.month_cost_usd / s.monthly_budget_usd >= 0.8)
-    out.push({
-      id: "budget",
-      tone: "warn",
-      label: "suggest.budget",
-      vars: { pct: String(Math.min(100, Math.round((s.month_cost_usd / s.monthly_budget_usd) * 100))) },
-      href: "/dashboard",
-    });
+  const { pct } = budgetFigures(s);
+  if (s.monthly_budget_usd > 0 && pct >= 80)
+    out.push({ id: "budget", tone: "warn", label: "suggest.budget", vars: { pct: String(Math.round(pct)) }, href: "/dashboard" });
 
   // A next job that builds on what exists, only when the agents it needs are online.
   const kinds = new Set(s.recent_artifacts.map((a) => a.kind));

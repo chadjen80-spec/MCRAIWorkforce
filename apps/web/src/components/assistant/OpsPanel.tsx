@@ -1,45 +1,116 @@
 "use client";
 
 import Link from "next/link";
-import { ProgressBar, cx } from "@/components/ui";
+import { useEffect, useState } from "react";
+import { JobStatusBadge } from "@/components/status";
+import { DemoBadge, ProgressBar, cx } from "@/components/ui";
 import { useI18n } from "@/i18n/I18nProvider";
+import type { ApiError } from "@/lib/api";
+import { budgetFigures } from "@/lib/briefing";
 import type { DashboardSummary, Job } from "@/lib/types";
 import { suggestTasks, type Suggestion, type WorkflowId } from "@/lib/workflows";
 
+/** The current time, refreshed every minute (for "waiting since" labels). */
+function useNow(every = 60000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), every);
+    return () => clearInterval(id);
+  }, [every]);
+  return now;
+}
+
+/** "3 hours ago" in the page language, from real timestamps only. */
+export function timeAgo(iso: string, now: number, locale: string): string {
+  const secs = Math.round((new Date(iso).getTime() - now) / 1000);
+  const rtf = new Intl.RelativeTimeFormat(locale === "th" ? "th-TH" : "en-US", { numeric: "auto" });
+  const abs = Math.abs(secs);
+  if (abs < 60) return rtf.format(secs, "second");
+  if (abs < 3600) return rtf.format(Math.round(secs / 60), "minute");
+  if (abs < 86400) return rtf.format(Math.round(secs / 3600), "hour");
+  return rtf.format(Math.round(secs / 86400), "day");
+}
+
 /**
- * What needs the manager's attention right now: jobs waiting for approval (each with a direct Review link),
- * work in progress, failures, budget and offline workers. Every number links to the list behind it.
+ * What needs the manager's attention right now: jobs waiting for approval (each with a direct Review link,
+ * how long it has waited and its QA verdict), live work (with "Watch live"), failures, budget and offline
+ * workers. Every number links to the list behind it. There is no deadline or business priority in the
+ * data model, so none is shown.
  */
 export function OpsSummary({
   summary,
   waiting,
   waitingTotal,
-  failed = false,
+  live = [],
+  loading = false,
+  error,
+  takenAt,
+  onRetry,
+  onWatch,
+  watchingJobId = null,
+  now: nowProp,
 }: {
   summary: DashboardSummary | null | undefined;
   /** The newest jobs awaiting approval (a few). */
   waiting: Job[] | undefined;
   waitingTotal?: number;
-  /** The status could not be loaded. */
-  failed?: boolean;
+  /** Jobs still being worked on. */
+  live?: Job[];
+  /** Nothing loaded yet. */
+  loading?: boolean;
+  /** The last refresh failed (summary may still hold the previous snapshot). */
+  error?: ApiError;
+  /** When the shown snapshot was taken (ms). */
+  takenAt?: number;
+  onRetry?: () => void;
+  onWatch?: (jobId: string) => void;
+  watchingJobId?: string | null;
+  now?: number;
 }) {
-  const { t, money, dateTime } = useI18n();
+  const { t, money, locale, dateTime } = useI18n();
+  const ticking = useNow();
+  const now = nowProp ?? ticking;
   const s = summary;
-  const budgetPct = s && s.monthly_budget_usd > 0 ? Math.min(100, (s.month_cost_usd / s.monthly_budget_usd) * 100) : 0;
+  const budget = s ? budgetFigures(s) : null;
   const offline = s?.offline_queues ?? [];
   const total = waitingTotal ?? s?.awaiting_approval_jobs ?? 0;
+
+  if (loading && !s)
+    return (
+      <section aria-labelledby="ops-title" aria-busy="true" className="rounded-2xl border border-line bg-surface p-4">
+        <h2 id="ops-title" className="text-lg font-semibold text-ink">
+          {t("ops.title")}
+        </h2>
+        <p role="status" className="mt-2 text-sm text-dim">
+          {t("ops.loading")}
+        </p>
+        <div aria-hidden="true" className="mt-3 grid grid-cols-3 gap-2">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="h-16 animate-pulse rounded-xl bg-raised" />
+          ))}
+        </div>
+      </section>
+    );
 
   return (
     <section aria-labelledby="ops-title" className="rounded-2xl border border-line bg-surface p-4">
       <h2 id="ops-title" className="text-lg font-semibold text-ink">
         {t("ops.title")}
       </h2>
-      {failed && !s && (
-        <p role="status" className="mt-2 text-sm text-bad">
-          {t("ops.loadFailed")}
-        </p>
+      {error && (
+        <div role="alert" className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-bad/40 bg-bad/10 p-3 text-sm text-ink">
+          <span className="min-w-0 flex-1">
+            {s && takenAt ? t("ops.stale", { time: dateTime(new Date(takenAt).toISOString()) }) : t("ops.loadFailed")}
+          </span>
+          {onRetry && (
+            <button type="button" onClick={onRetry} className="rounded-lg border border-line bg-raised px-3 py-1 font-medium text-ink hover:border-brand-soft/60">
+              {t("ops.retry")}
+            </button>
+          )}
+        </div>
       )}
-
+      {!s ? null : (
+      <>
       <ul className="mt-3 grid grid-cols-3 gap-2">
         <Stat
           label={t("ops.awaiting")}
@@ -51,16 +122,14 @@ export function OpsSummary({
         <Stat label={t("ops.failed")} value={s?.failed_jobs} href="/jobs?status=failed" tone={s && s.failed_jobs > 0 ? "bad" : "plain"} />
       </ul>
 
-      {s && (
+      {budget && (
         <Link href="/dashboard" className="mt-3 block rounded-xl border border-line bg-bg p-3 transition hover:border-brand-soft/60">
           <span className="flex items-baseline justify-between gap-2 text-sm">
             <span className="text-dim">{t("ops.budget")}</span>
-            <span className="font-semibold tabular-nums text-ink">
-              {t("ops.budgetValue", { spent: s.month_cost_usd.toFixed(2), budget: s.monthly_budget_usd.toFixed(0) })}
-            </span>
+            <span className="font-semibold tabular-nums text-ink">{t("ops.budgetValue", { spent: budget.spent, budget: budget.budget })}</span>
           </span>
           <div className="mt-2">
-            <ProgressBar value={budgetPct} label={t("ops.budget")} tone={budgetPct >= 80 ? "bad" : "brand"} />
+            <ProgressBar value={budget.pct} label={t("ops.budget")} tone={budget.pct >= 80 ? "bad" : "brand"} />
           </div>
         </Link>
       )}
@@ -69,6 +138,46 @@ export function OpsSummary({
         <p role="status" className="mt-3 rounded-xl border border-warn/40 bg-warn/10 p-3 text-sm leading-relaxed text-ink">
           {t("ops.workersDown", { queues: offline.join(", ") })}
         </p>
+      )}
+
+      {live.length > 0 && (
+        <>
+          <h3 className="mt-4 text-sm font-semibold text-ink">{t("ops.live")}</h3>
+          <ul className="mt-2 space-y-2">
+            {live.slice(0, 3).map((job) => {
+              const shown = job.id === watchingJobId;
+              return (
+                <li key={job.id} className="rounded-xl border border-brand/40 bg-bg p-3">
+                  <div className="flex items-start gap-3">
+                    <p className="line-clamp-2 min-w-0 flex-1 text-sm leading-relaxed text-ink" title={job.command}>
+                      {job.command}
+                    </p>
+                    {onWatch &&
+                      (shown ? (
+                        <span className="shrink-0 rounded-lg px-2 py-1 text-xs font-medium text-cyan">{t("ops.watching")}</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => onWatch(job.id)}
+                          aria-label={`${t("ops.watch")}: ${job.command.slice(0, 80)}`}
+                          className="shrink-0 rounded-lg border border-brand/60 px-3 py-1.5 text-sm font-semibold text-brand-soft transition hover:bg-brand/15"
+                        >
+                          {t("ops.watch")}
+                        </button>
+                      ))}
+                  </div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <JobStatusBadge status={job.status} />
+                    <div className="min-w-0 flex-1">
+                      <ProgressBar value={job.progress} label={`${t("ops.live")}: ${job.command.slice(0, 60)}`} />
+                    </div>
+                    <span className="text-xs tabular-nums text-dim">{Math.round(job.progress)}%</span>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </>
       )}
 
       <h3 className="mt-4 text-sm font-semibold text-ink">{t("ops.waitingTitle")}</h3>
@@ -81,9 +190,24 @@ export function OpsSummary({
                   {job.command}
                 </p>
                 <p className="mt-0.5 text-xs text-dim">
-                  {dateTime(job.created_at)}
+                  {job.finished_at ? t("ops.waitingSince", { ago: timeAgo(job.finished_at, now, locale) }) : dateTime(job.created_at)}
                   {(job.actual_cost_usd ?? job.estimated_cost_usd) != null && ` · ${money(job.actual_cost_usd ?? job.estimated_cost_usd ?? 0)}`}
                 </p>
+                {(job.qa_verdict || job.demo_mode) && (
+                  <p className="mt-1 flex flex-wrap gap-1.5">
+                    {job.qa_verdict && (
+                      <span
+                        className={cx(
+                          "rounded-full px-2 py-px text-xs font-medium",
+                          job.qa_verdict === "PASS" ? "bg-ok/15 text-ok" : "bg-warn/15 text-warn",
+                        )}
+                      >
+                        {t(job.qa_verdict === "PASS" ? "ops.qaPass" : "ops.qaCheck")}
+                      </span>
+                    )}
+                    {job.demo_mode && <DemoBadge />}
+                  </p>
+                )}
               </div>
               <Link
                 href={`/jobs/${job.id}`}
@@ -102,6 +226,8 @@ export function OpsSummary({
         <Link href="/jobs?status=awaiting_approval" className="mt-2 inline-block text-sm font-medium text-brand-soft hover:underline">
           {t("ops.viewAll", { n: String(total) })}
         </Link>
+      )}
+      </>
       )}
     </section>
   );
@@ -131,13 +257,26 @@ export function TaskSuggestions({
   summary,
   onStart,
   disabled = false,
+  jobs,
+  watchingJobId = null,
+  onWatch,
+  onRetry,
 }: {
   summary: DashboardSummary | null | undefined;
   onStart: (workflow: WorkflowId) => void;
   disabled?: boolean;
+  /** Listed jobs from the operations snapshot (live, waiting, failed). */
+  jobs?: readonly Job[];
+  watchingJobId?: string | null;
+  onWatch?: (jobId: string) => void;
+  /** Put a failed job's command back in the composer. */
+  onRetry?: (command: string) => void;
 }) {
   const { t } = useI18n();
-  const items = suggestTasks(summary);
+  const items = suggestTasks(summary, 4, { jobs, watchingJobId }).filter(
+    (s) => (!s.watchJobId || onWatch) && (!s.retryCommand || onRetry),
+  );
+  const act: Actions = { onStart, onWatch, onRetry };
   if (!summary) return null;
   return (
     <section aria-labelledby="suggest-title" className="rounded-2xl border border-line bg-surface p-4">
@@ -150,7 +289,7 @@ export function TaskSuggestions({
         <ul className="mt-2 space-y-2">
           {items.map((s) => (
             <li key={s.id}>
-              <SuggestionItem s={s} onStart={onStart} disabled={disabled} />
+              <SuggestionItem s={s} act={act} disabled={disabled} />
             </li>
           ))}
         </ul>
@@ -159,7 +298,13 @@ export function TaskSuggestions({
   );
 }
 
-function SuggestionItem({ s, onStart, disabled }: { s: Suggestion; onStart: (w: WorkflowId) => void; disabled: boolean }) {
+interface Actions {
+  onStart: (w: WorkflowId) => void;
+  onWatch?: (jobId: string) => void;
+  onRetry?: (command: string) => void;
+}
+
+function SuggestionItem({ s, act, disabled }: { s: Suggestion; act: Actions; disabled: boolean }) {
   const { t } = useI18n();
   const text = t(s.label, s.vars);
   const box = cx(
@@ -180,9 +325,16 @@ function SuggestionItem({ s, onStart, disabled }: { s: Suggestion; onStart: (w: 
         {arrow}
       </Link>
     );
-  if (s.workflow)
+  const run = s.workflow
+    ? () => act.onStart(s.workflow!)
+    : s.watchJobId && act.onWatch
+      ? () => act.onWatch!(s.watchJobId!)
+      : s.retryCommand && act.onRetry
+        ? () => act.onRetry!(s.retryCommand!)
+        : null;
+  if (run)
     return (
-      <button type="button" disabled={disabled} onClick={() => onStart(s.workflow!)} className={cx(box, "text-ink hover:border-brand-soft/60 disabled:opacity-50")}>
+      <button type="button" disabled={disabled} onClick={run} className={cx(box, "text-ink hover:border-brand-soft/60 disabled:opacity-50")}>
         {dot}
         <span className="min-w-0">{text}</span>
         {arrow}
