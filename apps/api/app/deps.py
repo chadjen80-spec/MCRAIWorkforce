@@ -111,7 +111,10 @@ def get_principal(
         assert org is not None
         key.last_used_at = utcnow()
         session.commit()
-        principal = Principal(organization=org, role="admin", api_key_name=key.name)
+        # Service keys (n8n, integrations) may submit and follow jobs but are never admins: approving
+        # deliverables, deleting shared data and changing settings or provider keys need a signed-in
+        # owner or admin, so an automation can never approve the work it submitted.
+        principal = Principal(organization=org, role="service", api_key_name=key.name)
     elif authorization and authorization.lower().startswith("bearer "):
         try:
             claims = decode_access_token(authorization[7:].strip())

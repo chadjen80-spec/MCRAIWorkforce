@@ -28,6 +28,10 @@ itself continues and stays visible in the dashboard.
 
 ## Import and credentials
 
+The n8n key is a **service** key: it can submit, plan, dispatch and follow jobs and write events, but
+it cannot approve deliverables, delete anything or change settings (those return 403). Approval stays
+with a signed-in owner or admin, and n8n receives download links only after a job is approved.
+
 No API key or password is stored in the JSON. The nodes refer to two credentials by name; create
 them in n8n and select them once after import.
 

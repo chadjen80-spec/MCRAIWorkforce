@@ -1457,6 +1457,28 @@ def test_only_owners_and_admins_approve_jobs_or_delete_assets(client, auth, org_
     assert client.delete(f"/v1/assets/{asset['id']}", headers=auth).status_code == 204
 
 
+def test_service_api_keys_run_jobs_but_never_act_as_admins(client, auth, org_a, fake_openai):
+    """Found in the n8n end-to-end run: API keys were treated as admins, so n8n could approve its own jobs."""
+    key = {"X-API-Key": org_a["api_key"]}
+    job = submit(client, key, require_approval=True)  # automations can still submit and follow work
+    assert job["status"] == "awaiting_approval", job
+    assert client.get(f"/v1/jobs/{job['id']}/tasks", headers=key).status_code == 200
+    assert client.post(f"/v1/jobs/{job['id']}/events", json={"action": "n8n.workflow_completed", "detail": {}},
+                       headers=key).status_code == 201
+    for decision in ("approved", "rejected"):
+        resp = client.post(f"/v1/jobs/{job['id']}/approve", json={"decision": decision}, headers=key)
+        assert resp.status_code == 403 and resp.json()["error"]["code"] == "FORBIDDEN"
+    asset = _upload(client, auth, "Logo").json()
+    assert client.delete(f"/v1/assets/{asset['id']}", headers=key).status_code == 403
+    assert client.delete(f"/v1/jobs/{job['id']}", headers=key).status_code == 403
+    assert client.delete("/v1/jobs", headers=key).status_code == 403
+    assert client.delete("/v1/artifacts", headers=key).status_code == 403
+    assert client.patch("/v1/settings/organization", json={"monthly_budget_usd": 99999}, headers=key).status_code == 403
+    assert client.put("/v1/settings/providers/openai", json={"api_key": "sk-" + "x" * 40}, headers=key).status_code == 403
+    # a signed-in owner still approves
+    assert client.post(f"/v1/jobs/{job['id']}/approve", json={"decision": "approved"}, headers=auth).status_code == 200
+
+
 def test_automations_get_no_file_links_until_the_job_is_approved(client, auth, org_a, fake_openai):
     key = {"X-API-Key": org_a["api_key"]}
     job = submit(client, auth, require_approval=True)

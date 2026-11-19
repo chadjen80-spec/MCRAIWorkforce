@@ -3,9 +3,9 @@
 Date: 2026-11-20 · Baseline commit: `2bcc81b` (clean tree, secrets excluded by `.gitignore`)
 
 **Status: NOT production-ready.** The full stack now runs in Docker on PostgreSQL, Redis and MinIO:
-migrations reach head with no drift, health checks pass, and all 97 backend tests (including the
-concurrency tests) pass on PostgreSQL. The n8n workflow (item 10) has **not** been run end to end yet:
-it needs an n8n API key, which needs your OK to create.
+migrations reach head with no drift, health checks pass, and the backend suite (including the
+concurrency tests) passes on PostgreSQL. The n8n workflow was tested end to end against the running
+stack (item 10). That run found that API keys acted as admins; this is fixed (security issue 6).
 
 ### Integration run (2026-11-20, `scripts/integration-check.ps1`)
 
@@ -17,8 +17,30 @@ it needs an n8n API key, which needs your OK to create.
 | `alembic current` / `alembic check` in the API container | `0006 (head)` / no new upgrade operations |
 | API, 4 workers, web, n8n | all started; API and web healthy |
 | `/health/live`, `/health/ready` | 200; database, broker and storage `ok` |
-| Backend suite on PostgreSQL (`mcr_test`) | **97 passed** in 224 s |
-| n8n workflow end to end | not run (needs an API key) |
+| Backend suite on PostgreSQL (`mcr_test`) | **97 passed** in 224 s; the new API-key test also passes on PostgreSQL |
+| n8n workflow end to end | passed (see "n8n end-to-end run" below) |
+
+### n8n end-to-end run (2026-11-20)
+
+Setup through n8n's public API: credentials `MCR API Key` (an MCR service key named `n8n`) and
+`MCR Webhook Auth` (a random token), workflow imported from `n8n/workflows/mcr-ai-workforce.json` with all
+9 credential slots linked, then activated. The test stack has no AI provider, so it ran with
+`DEMO_MODE=true` (placeholder deliverables, $0).
+
+| Check | Result |
+|---|---|
+| Webhook with a wrong token | 403 |
+| Webhook with a too-short command | 400 `VALIDATION_ERROR` |
+| Valid call | 202 with `job_id` straight away |
+| Same `request_id` again | same job (idempotent) |
+| Plan → dispatch → agents → QA, polled by n8n | 5/5 tasks succeeded, job stops at `awaiting_approval` |
+| `n8n.workflow_completed` written to the job's audit trail by n8n | yes |
+| Drafts seen with the n8n key | 7 files, none released, 0 download links, 0 text previews, preview 403 |
+| n8n key tries to approve | **was 200 (bug), now 403** |
+| Signed-in owner approves | 200, job `completed` |
+| After approval, with the n8n key | 7 download links; signed download 200 |
+| n8n executions | all `success` |
+| Failure path (before demo mode: no provider configured) | job `failed` with `PROVIDER_NOT_CONFIGURED`; n8n still reported it to the audit trail |
 
 Problems the run found and fixed:
 
@@ -46,7 +68,7 @@ Problems the run found and fixed:
 | 7 | Alembic migrations on PostgreSQL | Done: `0006 (head)`, `alembic check` clean, 97 tests pass on PostgreSQL |
 | 8 | Concurrency tests | Done (`tests/test_concurrency.py`, 8 tests) |
 | 9 | Frontend tests for Assistant and approval flow | Done (Vitest + Testing Library) |
-| 10 | n8n workflow against the running API | **Not run** (needs Docker + an n8n API key, which needs your OK) |
+| 10 | n8n workflow against the running API | Done: end to end on the Docker stack; found and fixed issue 6 |
 
 ## Security issues fixed
 
@@ -64,6 +86,11 @@ Problems the run found and fixed:
 5. **Proxy hardening.** The dashboard proxy now streams bodies and forwards only `range`/`if-range` and
    the needed response headers (`content-type`, `content-length`, `content-range`, `accept-ranges`,
    `content-disposition`). Path-escape and open-redirect guards are covered by tests.
+6. **Every API key was an admin** (found in the n8n run). `get_principal` gave API keys `role="admin"`,
+   so the n8n key could approve the jobs it submitted, delete jobs, assets and deliverables, raise the
+   budget and replace AI provider keys. API keys now get `role="service"`: they can submit, plan,
+   dispatch and follow jobs and write events (everything the workflow uses), but every `require_admin`
+   endpoint returns 403. Test: `test_service_api_keys_run_jobs_but_never_act_as_admins`.
 
 ## Reliability issues fixed
 
@@ -118,17 +145,17 @@ Postgres test switch landed in the Phase 0 baseline commit.)
 
 | Suite | Baseline (`2bcc81b`) | Now |
 |---|---|---|
-| Backend pytest (SQLite) | 83 passed | **97 passed** |
+| Backend pytest (SQLite) | 83 passed | **98 passed** |
 | Backend concurrency (part of the above) | – | 8 passed |
 | ruff / mypy | clean | clean |
 | `alembic check` (SQLite dev DB at `0006`) | no drift | no drift |
-| Frontend Vitest | 18 passed | **27 passed** |
+| Frontend Vitest | 18 passed | **45 passed** (incl. Assistant redesign) |
 | Frontend lint / typecheck / build | pass | pass |
 | `npm audit` | 0 vulnerabilities | 0 vulnerabilities |
 | Backend pytest on PostgreSQL 17 (Docker) | not run | **97 passed** |
 | Migrations on PostgreSQL (`alembic check`) | not run | `0006 (head)`, no drift |
 | Docker stack health (API, workers, web, n8n) | not run | healthy |
-| n8n end-to-end | not run | **not run** (needs an API key) |
+| n8n end-to-end | not run | **passed** (demo mode) |
 
 Live checks on the dev stack: draft preview renders in the dashboard; Range through the proxy returns
 `206`; the approval panel renders on a waiting job; all worker queues report heartbeats;
@@ -139,9 +166,12 @@ writes really run in parallel and row locks apply, not only on SQLite, which ser
 
 ## Remaining risks
 
-1. **n8n not tested end to end** (item 10). The stack's n8n is running at http://localhost:15678; the
-   workflow import and a test call need an n8n API key.
-2. **One local run, not CI.** The `api-postgres` CI job has not run yet (nothing is pushed).
+1. **n8n tested in demo mode only.** Real providers (OpenAI, ComfyUI, Firefly) were not used in the
+   Docker run; the provider paths are covered by unit tests with fakes.
+2. **API keys cannot be revoked from the CLI.** The test stack holds two `n8n` keys (the first was
+   lost during setup and is unusable without its value). Revoking needs a database update or a new
+   command.
+3. **One local run, not CI.** The `api-postgres` CI job has not run yet (nothing is pushed).
 3. **Reservations cover agent calls only.** Direct paid calls from API routes (e.g. some poster
    re-renders) still use the pre-check; they are bounded by the monthly check but not reserved.
 4. **Windows thread pool has no hard time limits.** Celery `-P threads` ignores `time_limit`; FFmpeg
