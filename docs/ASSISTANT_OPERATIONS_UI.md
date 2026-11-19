@@ -62,8 +62,11 @@ Checked in the browser at 1440 × 1000 and 375 × 812: no horizontal scroll; the
 composer, focuses it with the caret at the end and starts nothing; full screen still hides the panels and
 Escape leaves it.
 
+Production build (`npm run build`, Next.js 16.4.6, 2026-11-20): compiled, type-checked and generated all 14
+pages with no errors or warnings. `/assistant` and `/jobs` are prerendered as static pages (`/jobs` reads
+`?status=` on the client). Next 16 writes dev output to `.next/dev`, so the build can run while the dev
+server is up.
+
 ## Not done
 
-- No production build was run during this change, because `next build` shares the `.next` folder with the
-  running dev server. Type check, lint and tests pass. Run `npm run build` before deploying.
 - Suggestions use the dashboard summary only. They do not yet look at per-agent usage history.
