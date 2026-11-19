@@ -291,7 +291,7 @@ export function JobMonitor() {
       {/* Full width so the wide graph layout stays legible on desktop. */}
       <Card className="mb-4">
         <SectionTitle>{t("graph.title")}</SectionTitle>
-        <AgentGraph job={job} tasks={tasks} />
+        <AgentGraph job={job} tasks={tasks} qa={qa} artifacts={artifacts.data} />
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-3">

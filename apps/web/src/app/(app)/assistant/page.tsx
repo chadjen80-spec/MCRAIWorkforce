@@ -43,6 +43,7 @@ import type {
   JobStatus,
   PosterSpec,
   PosterTemplate,
+  QaReport,
   Session,
   Task,
 } from "@/lib/types";
@@ -99,15 +100,22 @@ export default function AssistantPage() {
   // Jobs created from a design here: their finished poster is shown on Mira's screen.
   const [posterJobs, setPosterJobs] = useState<string[]>([]);
 
-  const monitor = useApi<{ job: Job; tasks: Task[] }>(
+  const monitor = useApi<{ job: Job; tasks: Task[]; qa?: QaReport | null; artifacts?: Artifact[] }>(
     jobId ? `assistant:${jobId}` : null,
     async (signal) => {
       const [job, tasks] = await Promise.all([
         api<Job>(`/v1/jobs/${jobId}`, { signal }),
         api<ItemList<Task>>(`/v1/jobs/${jobId}/tasks`, { signal }),
       ]);
-      if (SETTLED.includes(job.status)) setSettledJob(job.id);
-      return { job, tasks: tasks.items };
+      if (!SETTLED.includes(job.status)) return { job, tasks: tasks.items };
+      // Settled: polling stops after this fetch, so the QA report and the files are loaded once here
+      // (the graph's details panel and the poster result both use them).
+      const [qa, artifacts] = await Promise.all([
+        job.qa_verdict ? api<QaReport>(`/v1/jobs/${jobId}/qa`, { signal }).catch(() => null) : Promise.resolve(null),
+        api<ItemList<Artifact>>(`/v1/jobs/${jobId}/artifacts`, { signal }).then((r) => r.items, () => undefined),
+      ]);
+      setSettledJob(job.id);
+      return { job, tasks: tasks.items, qa, artifacts };
     },
     { interval: jobId !== null && settledJob === jobId ? 0 : 2000 },
   );
@@ -123,11 +131,8 @@ export default function AssistantPage() {
   // Set when a quick action filled the composer: shows what to add before sending.
   const [filled, setFilled] = useState(false);
   const showPosterResult = Boolean(job && settled && posterJobs.includes(job.id));
-  const posterResult = useApi<Artifact[]>(
-    showPosterResult && job ? `assistant-poster:${job.id}` : null,
-    async (signal) =>
-      (await api<ItemList<Artifact>>(`/v1/jobs/${job!.id}/artifacts`, { signal })).items.filter((a) => a.kind === "image"),
-  );
+  // The finished poster comes from the files loaded with the settled job (no separate request).
+  const posterResult = { data: showPosterResult ? monitor.data?.artifacts?.filter((a) => a.kind === "image") : undefined };
 
   // --- conversation primitives ---------------------------------------------------------
   const begin = (): AbortSignal => {
@@ -935,7 +940,7 @@ export default function AssistantPage() {
               </div>
             )}
             {job ? (
-              <AgentGraph job={job} tasks={monitor.data?.tasks ?? []} fill={fullScreen} />
+              <AgentGraph job={job} tasks={monitor.data?.tasks ?? []} fill={fullScreen} qa={monitor.data?.qa} artifacts={monitor.data?.artifacts} />
             ) : (
               <div className="flex h-64 items-center justify-center rounded-xl border border-line bg-[#050912] text-sm text-dim">{t("common.loading")}</div>
             )}
