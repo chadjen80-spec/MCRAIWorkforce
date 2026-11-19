@@ -47,13 +47,21 @@ if (-not (Test-Path ".env")) {
   Note "Created .env with random secrets (not committed)."
 } else { Note ".env exists; using it." }
 
+function Assert-Ok([string]$what) {
+  # Native commands do not throw on failure in Windows PowerShell; check the exit code explicitly.
+  if ($LASTEXITCODE -ne 0) { Note "FAILED: $what (exit $LASTEXITCODE)"; throw "$what failed (see $log)" }
+}
+
 Step "Build and start the stack"
 docker @compose up -d --build --wait postgres redis minio
+Assert-Ok "starting postgres, redis and minio"
 docker @compose up --build migrate
+Assert-Ok "building and running migrate"
 $migrateExit = (docker @compose ps -a migrate --format "{{.ExitCode}}")
 Note "migrate exit code: $migrateExit"
 if ($migrateExit -ne "0") { docker @compose logs migrate | Out-File $log -Append -Encoding utf8; throw "migrations failed (see $log)" }
 docker @compose up -d --build --wait api worker-core worker-image worker-video worker-maintenance web n8n
+Assert-Ok "starting the API, workers, web and n8n"
 
 Step "Migrations on PostgreSQL"
 docker @compose exec -T api alembic current | ForEach-Object { Note "alembic current: $_" }
@@ -69,13 +77,23 @@ Step "Backend tests on PostgreSQL"
 $pgUser = ((Get-Content .env | Select-String "^POSTGRES_USER=") -replace "^POSTGRES_USER=", "")
 if (-not $pgUser) { $pgUser = "mcr" }
 $pgPass = ((Get-Content .env | Select-String "^POSTGRES_PASSWORD=") -replace "^POSTGRES_PASSWORD=", "")
-docker @compose exec -T postgres sh -c "psql -U $pgUser -d postgres -tc ""SELECT 1 FROM pg_database WHERE datname='mcr_test'"" | grep -q 1 || psql -U $pgUser -d postgres -c 'CREATE DATABASE mcr_test'" | Out-Null
-$env:TEST_DATABASE_URL = "postgresql+psycopg://${pgUser}:${pgPass}@127.0.0.1:55432/mcr_test"
+# Plain arguments only: Windows PowerShell 5.1 drops nested quotes when it passes a `sh -c "..."` string
+# to a native command, which silently skipped this step before.
+$exists = (docker @compose exec -T postgres psql -U $pgUser -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = 'mcr_test'" | Out-String).Trim()
+if ($exists -ne "1") {
+  docker @compose exec -T postgres psql -U $pgUser -d postgres -c "CREATE DATABASE mcr_test" | Out-Null
+  Assert-Ok "creating the mcr_test database"
+  Note "Created database mcr_test."
+} else { Note "Database mcr_test exists." }
+$env:TEST_DATABASE_URL = "postgresql+psycopg://${pgUser}:${pgPass}@127.0.0.1:15432/mcr_test"
 Push-Location apps/api
 try {
-  uv run pytest -q 2>&1 | Tee-Object -Variable testOut | Out-Null
-  $testOut | Select-Object -Last 3 | ForEach-Object { Note $_ }
+  # --tb=line keeps connection strings (which contain the password) out of the log.
+  uv run pytest -q --tb=line 2>&1 | Tee-Object -Variable testOut | Out-Null
+  $testExit = $LASTEXITCODE
+  $testOut | ForEach-Object { "$_" -replace [regex]::Escape($pgPass), "***" } | Select-Object -Last 3 | ForEach-Object { Note $_ }
 } finally { Pop-Location; Remove-Item Env:TEST_DATABASE_URL }
+if ($testExit -ne 0) { Note "FAILED: backend tests on PostgreSQL (exit $testExit)"; throw "backend tests on PostgreSQL failed (see $log)" }
 
 Step "n8n"
 Note "n8n UI: http://localhost:15678 - import n8n/workflows/mcr-ai-workforce.json and create the two"

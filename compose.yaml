@@ -79,7 +79,9 @@ services:
       retries: 20
 
   minio:
-    image: ${MINIO_IMAGE:-minio/minio:latest}   # production must pin a release
+    # minio/minio is no longer published on Docker Hub; Chainguard builds the same MinIO server
+    # (includes mc for the healthcheck). Production should pin a digest via MINIO_IMAGE.
+    image: ${MINIO_IMAGE:-cgr.dev/chainguard/minio:latest}
     restart: unless-stopped
     command: ["server", "/data", "--console-address", ":9001"]
     environment:

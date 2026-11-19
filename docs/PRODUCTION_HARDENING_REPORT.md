@@ -2,10 +2,36 @@
 
 Date: 2026-11-20 · Baseline commit: `2bcc81b` (clean tree, secrets excluded by `.gitignore`)
 
-**Status: NOT production-ready.** Unit, concurrency and frontend tests pass on SQLite and the local dev
-stack. The integration run against PostgreSQL, Redis, MinIO and n8n (items 6, 7 and 10) has **not** been
-executed yet because Docker is not installed on this machine. The script for it is ready
-(`scripts/integration-check.ps1`).
+**Status: NOT production-ready.** The full stack now runs in Docker on PostgreSQL, Redis and MinIO:
+migrations reach head with no drift, health checks pass, and all 97 backend tests (including the
+concurrency tests) pass on PostgreSQL. The n8n workflow (item 10) has **not** been run end to end yet:
+it needs an n8n API key, which needs your OK to create.
+
+### Integration run (2026-11-20, `scripts/integration-check.ps1`)
+
+| Check | Result |
+|---|---|
+| Docker Desktop 29.9.3, Compose v5.7.0 | ok |
+| PostgreSQL 17, Redis 7, MinIO (Chainguard image) | healthy |
+| `migrate` service (`alembic upgrade head`) | exit 0 |
+| `alembic current` / `alembic check` in the API container | `0006 (head)` / no new upgrade operations |
+| API, 4 workers, web, n8n | all started; API and web healthy |
+| `/health/live`, `/health/ready` | 200; database, broker and storage `ok` |
+| Backend suite on PostgreSQL (`mcr_test`) | **97 passed** in 224 s |
+| n8n workflow end to end | not run (needs an API key) |
+
+Problems the run found and fixed:
+
+1. **`minio/minio` is no longer published on Docker Hub** (pull access denied). `compose.yaml` now
+   defaults to `cgr.dev/chainguard/minio:latest` (same MinIO server, includes `mc` for the existing
+   healthcheck). Override with `MINIO_IMAGE`; production should pin a digest.
+2. **Windows/Hyper-V reserves blocks of ports in 49152–65535**, which covered the old Redis test port
+   56379. The localhost-only test ports are now PostgreSQL 15432, Redis 16379, MinIO 19000.
+3. **Workers crashed in the container: `No module named 'packaging'`.** Kombu's Redis transport imports
+   it, but only dev tools pulled it in locally. Added `packaging>=24` to the API's runtime dependencies.
+4. **The script hid failures.** Native commands don't stop Windows PowerShell on error. The script now
+   checks every Docker step and the pytest exit code, creates `mcr_test` without nested shell quoting
+   (that step had silently done nothing), and masks the database password in its log.
 
 ## Summary by item
 
@@ -16,8 +42,8 @@ executed yet because Docker is not installed on this machine. The script for it 
 | 3 | Unapproved deliverables not downloadable | Done, tested |
 | 4 | FFmpeg lease heartbeats | Done, tested |
 | 5 | Atomic budget reservations | Done, tested |
-| 6 | PostgreSQL / Redis / MinIO via Docker Compose | Prepared (`compose.integration.yaml`), **not run** |
-| 7 | Alembic migrations on PostgreSQL | Prepared (script + CI job), **not run locally** |
+| 6 | PostgreSQL / Redis / MinIO via Docker Compose | Done: full stack healthy in Docker (see integration run) |
+| 7 | Alembic migrations on PostgreSQL | Done: `0006 (head)`, `alembic check` clean, 97 tests pass on PostgreSQL |
 | 8 | Concurrency tests | Done (`tests/test_concurrency.py`, 8 tests) |
 | 9 | Frontend tests for Assistant and approval flow | Done (Vitest + Testing Library) |
 | 10 | n8n workflow against the running API | **Not run** (needs Docker + an n8n API key, which needs your OK) |
@@ -99,22 +125,23 @@ Postgres test switch landed in the Phase 0 baseline commit.)
 | Frontend Vitest | 18 passed | **27 passed** |
 | Frontend lint / typecheck / build | pass | pass |
 | `npm audit` | 0 vulnerabilities | 0 vulnerabilities |
-| PostgreSQL / Redis / MinIO integration | not run | **not run** (no Docker) |
-| n8n end-to-end | not run | **not run** |
+| Backend pytest on PostgreSQL 17 (Docker) | not run | **97 passed** |
+| Migrations on PostgreSQL (`alembic check`) | not run | `0006 (head)`, no drift |
+| Docker stack health (API, workers, web, n8n) | not run | healthy |
+| n8n end-to-end | not run | **not run** (needs an API key) |
 
 Live checks on the dev stack: draft preview renders in the dashboard; Range through the proxy returns
 `206`; the approval panel renders on a waiting job; all worker queues report heartbeats;
 `/health/ready` reports database, broker and storage `ok`.
 
-Concurrency tests on SQLite serialise writes, so they prove the logic but not PostgreSQL row locking.
-They must be re-run with `TEST_DATABASE_URL` pointing at PostgreSQL (the integration script and the
-`api-postgres` CI job do this).
+The concurrency tests (exactly-one claim, retries, budget reservations) also pass on PostgreSQL, where
+writes really run in parallel and row locks apply, not only on SQLite, which serialises writes.
 
 ## Remaining risks
 
-1. **No integration run yet** on PostgreSQL, Redis, MinIO or n8n (items 6, 7, 10).
-2. **Row locking only proven on SQLite.** `SELECT ... FOR UPDATE`-style behaviour of the reservation
-   and claim code is unverified on PostgreSQL until the integration run.
+1. **n8n not tested end to end** (item 10). The stack's n8n is running at http://localhost:15678; the
+   workflow import and a test call need an n8n API key.
+2. **One local run, not CI.** The `api-postgres` CI job has not run yet (nothing is pushed).
 3. **Reservations cover agent calls only.** Direct paid calls from API routes (e.g. some poster
    re-renders) still use the pre-check; they are bounded by the monthly check but not reserved.
 4. **Windows thread pool has no hard time limits.** Celery `-P threads` ignores `time_limit`; FFmpeg
