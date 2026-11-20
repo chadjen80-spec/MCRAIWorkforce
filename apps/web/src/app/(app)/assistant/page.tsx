@@ -48,7 +48,7 @@ import type {
   Session,
   Task,
 } from "@/lib/types";
-import { POSTER_WORDS, confirmAction, posterIntent } from "@/lib/intent";
+import { POSTER_WORDS, confirmAction, posterIntent, qtcPageFor } from "@/lib/intent";
 import { askQtc, confirmQtc, qtcDecision, type QtcAnswer } from "@/lib/qtcAssistant";
 import { useApi } from "@/lib/useApi";
 import { VoiceError, canListen, listenOnce, speak } from "@/lib/voice";
@@ -323,6 +323,15 @@ export default function AssistantPage() {
 
   const propose = async (command: string, signal: AbortSignal) => {
     const text = command.trim().slice(0, 4000);
+    // A page name on its own ("ใบเสนอราคา", "Invoices") opens that Sales & Finance page.
+    const page = qtcPageFor(text);
+    if (page) {
+      setPending(null);
+      setQtc(null);
+      await say(t(`assistant.openPage.${page.name}`), signal);
+      if (!signal.aborted) router.push(page.path);
+      return;
+    }
     if (text.length < 5) return say(t("assistant.tooShort"), signal);
     setQtc(null);
     setMode("thinking");

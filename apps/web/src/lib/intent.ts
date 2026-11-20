@@ -45,3 +45,35 @@ export function confirmAction(answer: string, locale: Locale, command: string): 
   if (verdict === "no") return "cancel";
   return "ask_again";
 }
+
+// Saying just a page name opens that page of Sales & Finance ("ใบเสนอราคา", "Invoices", "เปิดหน้าใบแจ้งหนี้").
+// Only the bare name, optionally with words such as "open / show / go to / เปิด / ไปที่ / หน้า", counts: a longer
+// sentence ("สร้างใบเสนอราคาให้ลูกค้า ABC", "ใบเสนอราคา PDF สำหรับแคมเปญ") keeps going to the usual flows.
+export interface QtcPage {
+  path: string;
+  name: "quotations" | "invoices";
+}
+
+const QTC_PAGES: { page: QtcPage; words: string[] }[] = [
+  { page: { path: "/qtc/quotations", name: "quotations" }, words: ["ใบเสนอราคา", "quotation", "quotations", "quote", "quotes"] },
+  { page: { path: "/qtc/invoices", name: "invoices" }, words: ["ใบแจ้งหนี้", "invoice", "invoices"] },
+];
+const NAV_FILLER_EN = ["go to", "take me to", "please", "open", "show", "see", "view", "go", "the", "page", "list", "all", "my", "me"];
+const NAV_FILLER_TH = ["ขอดู", "เปิด", "ไปที่", "ไป", "ดู", "หน้า", "รายการ", "ทั้งหมด", "ให้หน่อย", "หน่อย", "ค่ะ", "คะ", "ครับ", "นะ", "ที่"];
+
+export function qtcPageFor(text: string): QtcPage | null {
+  let s = text.toLowerCase().replace(/[.,!?;:"'“”()]/g, " ");
+  for (const w of NAV_FILLER_EN) s = s.replace(new RegExp(`\\b${w}\\b`, "g"), " ");
+  s = s.replace(/\s+/g, "");
+  // Thai filler words only around the name, so the name itself is never altered
+  for (const { page, words } of QTC_PAGES) {
+    for (const word of words) {
+      const i = s.indexOf(word);
+      if (i < 0) continue;
+      let rest = s.slice(0, i) + " " + s.slice(i + word.length);
+      for (const f of NAV_FILLER_TH) rest = rest.split(f).join("");
+      if (rest.trim() === "") return page;
+    }
+  }
+  return null;
+}

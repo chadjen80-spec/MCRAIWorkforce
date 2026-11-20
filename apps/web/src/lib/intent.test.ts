@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { POSTER_WORDS, confirmAction, decide, posterIntent } from "./intent";
+import { POSTER_WORDS, confirmAction, decide, posterIntent, qtcPageFor } from "./intent";
 
 describe("decide: confirming a spoken command", () => {
   it("understands Thai yes / no / design", () => {
@@ -71,6 +71,30 @@ describe("confirmAction: Mira only starts a paid job on an explicit yes", () => 
   it("asks again when the answer is unclear, empty or noise", () => {
     for (const heard of ["", "อืม", "what?", "hmm maybe later"]) {
       expect(confirmAction(heard, heard.match(/[a-z]/) ? "en" : "th", job)).toBe("ask_again");
+    }
+  });
+});
+
+describe("qtcPageFor: saying a page name opens that Sales & Finance page", () => {
+  it("opens Quotations and Invoices for the bare name, in Thai or English", () => {
+    for (const text of ["ใบเสนอราคา", "ใบเสนอราคาค่ะ", "เปิดหน้าใบเสนอราคา", "ไปที่ใบเสนอราคา", "Quotations", "quotation.", "Open quotations", "show me the quotes"]) {
+      expect(qtcPageFor(text)?.path, text).toBe("/qtc/quotations");
+    }
+    for (const text of ["ใบแจ้งหนี้", "ขอดูใบแจ้งหนี้ทั้งหมด", "หน้า ใบแจ้งหนี้ ครับ", "Invoice", "Invoices!", "go to the invoices page"]) {
+      expect(qtcPageFor(text)?.path, text).toBe("/qtc/invoices");
+    }
+  });
+
+  it("leaves sentences to Mira's other flows", () => {
+    for (const text of [
+      "สร้างใบเสนอราคางาน Production ให้ลูกค้า ABC", // a draft quotation (Sales & Finance agent)
+      "ตรวจสอบใบเสนอราคาที่ยังไม่อนุมัติ", // a question about quotations
+      "ทำใบเสนอราคา PDF สำหรับแคมเปญโฆษณา", // a creative document job
+      "เตรียมข้อความติดตามเงินสำหรับ Invoice ที่เกินกำหนด",
+      "Create a quotation for customer ABC",
+      "ทำโปสเตอร์โปรโมชันร้านกาแฟ",
+    ]) {
+      expect(qtcPageFor(text), text).toBeNull();
     }
   });
 });
