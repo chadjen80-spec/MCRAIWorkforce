@@ -1,14 +1,16 @@
 "use client";
 
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
+import { CreateOrder } from "@/components/qtc/BillingParts";
 import { LineEditor, QuotationStatusBadge, Totals, linesValid } from "@/components/qtc/QuotationParts";
 import { Field, QtcError, QtcShell } from "@/components/qtc/QtcShell";
 import { Badge, Button, Card, LoadingBlock, buttonClass, cx } from "@/components/ui";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/dictionaries";
 import { type ApiError, api, toApiError } from "@/lib/api";
-import { type LineDraft, type Page, type Quotation, type Service, formatAmount, lineFromQuotation, linesBody, trimZeros } from "@/lib/qtc";
+import { type LineDraft, type Order, type Page, type Quotation, type Service, formatAmount, lineFromQuotation, linesBody, trimZeros } from "@/lib/qtc";
 import { useApi } from "@/lib/useApi";
 
 interface History {
@@ -30,6 +32,10 @@ export default function QuotationDetailPage() {
     return { revisions, approvals };
   });
   const services = useApi<Page<Service>>("qtc:services-for-quote", (signal) => api<Page<Service>>("/v1/qtc/services", { query: { limit: 200 }, signal }));
+  const accepted = quotation.data?.status === "accepted";
+  const order = useApi<Page<Order>>(accepted ? `qtc:quotation-order:${id}` : null, (signal) =>
+    api<Page<Order>>("/v1/qtc/orders", { query: { quotation_id: id, limit: 1 }, signal }),
+  );
   const [editing, setEditing] = useState<LineDraft[] | null>(null);
   const [form, setForm] = useState<Form>(null);
   const [error, setError] = useState<ApiError | null>(null);
@@ -160,6 +166,17 @@ export default function QuotationDetailPage() {
             </Card>
 
             <Actions q={q} form={form} setForm={setForm} busy={busy} act={act} startEdit={() => setEditing(q.lines.map(lineFromQuotation))} editing={!!editing} />
+
+            {accepted && order.data && (order.data.items[0] ? (
+              <Card>
+                <p className="text-sm text-ink">{t("qtc.o.converted", { number: order.data.items[0].number })}</p>
+                <Link className={cx(buttonClass("secondary", "sm"), "mt-2")} href={`/qtc/orders/${order.data.items[0].id}`}>
+                  {order.data.items[0].number}
+                </Link>
+              </Card>
+            ) : (
+              <CreateOrder quotationId={q.id} />
+            ))}
 
             {history.data && (history.data.revisions.length > 0 || history.data.approvals.length > 0) && (
               <Card>

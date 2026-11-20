@@ -1,6 +1,6 @@
 # Quote-to-Cash: implementation report
 
-Date: 2026-11-20 · Phase A on `main` (`2186a66`); Phase B on `main`'s working tree (uncommitted at the time of writing)
+Date: 2026-11-20 · Phases A (`2186a66`) and B (`0725dd2`) on `main`; Phase C in the working tree (uncommitted at the time of writing)
 
 ## Status by phase
 
@@ -8,11 +8,96 @@ Date: 2026-11-20 · Phase A on `main` (`2186a66`); Phase B on `main`'s working t
 |---|---|---|
 | **A** | Customer CRM, service catalogue, rate cards (price lists), audit, numbering | **Done and tested** (SQLite and PostgreSQL) |
 | **B** | Quotation engine, approval, revisions, acceptance, Thai PDF / DOCX | **Done and tested** (SQLite and PostgreSQL) |
-| C | Sales orders, invoices, payment tracking | Not started |
+| **C** | Sales orders, billing schedule, invoices, payments, receivables | **Done and tested** (SQLite and PostgreSQL); credit notes and tax documents **designed, not built** |
 | D | AI agents (SalesIntake, Quotation, Finance, Collection) and Mira | Not started |
 | E | n8n workflows, QTC dashboard, end-to-end tests | Not started |
 
-Nothing beyond Phase B is claimed. The `/qtc` overview lists phases C–E as "Planned" text, not as buttons.
+Nothing beyond Phase C is claimed. The `/qtc` overview lists the dashboard (Phase E) as "Planned" text.
+
+## Phase C: what exists
+
+### Database (migration `0010`)
+
+| Table | Integrity rules |
+|---|---|
+| `sales_orders` | `SO-YYYY-NNNN` unique per org; **unique `quotation_id`** (one order per quotation); keeps the accepted revision number and its full snapshot; status open / completed / cancelled; optional link to an existing `projects` row |
+| `sales_order_lines` | copied from the accepted revision |
+| `sales_order_milestones` | billing (deposit / installment / final, amounts net / VAT / total ≥ 0) and delivery milestones (one per line, amount 0, can be marked delivered) |
+| `invoices` | commercial invoice only (`document_type = 'commercial_invoice'` check); `INV-YYYY-NNNN` assigned **when issued** (drafts use no number); `0 ≤ paid_amount ≤ total` check; **one live invoice per milestone** (partial unique index, a cancelled one can be replaced) |
+| `invoice_lines` | the order's lines (whole-order invoice) or one line for the milestone |
+| `payment_records` | `PAY-YYYY-NNNN`; amount > 0; method check; status pending_confirmation / confirmed / rejected; **unique (method, reference)** among non-rejected payments (partial index); idempotency key; evidence file key |
+| `payment_allocations` | amount > 0; unique (payment, invoice) |
+| `payment_reminders` | for Phase D (draft / approved / sent; channel email / LINE / manual) — no sending exists |
+
+### Rules
+
+- **Conversion:** only an accepted quotation, in one transaction; copies the accepted revision; a second or parallel
+  conversion gets `409 ALREADY_CONVERTED` with the existing order (unique constraint + row lock).
+- **Billing schedule:** percentages (exactly 100) or amounts (exactly the total); the last part takes the rounding
+  remainder for both the total and the VAT, so parts always add up (e.g. 33.33 / 33.33 / 33.34 % of 48,150.00 →
+  16,048.40 / 16,048.40 / 16,053.20).
+- **Invoices:** drafted per billing milestone; issued with number, issue date and due date (customer's payment terms);
+  overdue is computed (issued or partly paid, past due); cancellation by owner / admin only, only when nothing is paid
+  or pending; the number is kept and never reused; the milestone can be invoiced again.
+- **Payments:** recorded as **pending confirmation** and applied to nothing; a slip or receipt can be attached
+  (PDF / JPEG / PNG / WebP, ≤ 10 MB) and is evidence only; an owner or admin (signed in) **confirms** the money arrived,
+  which applies the allocations in one transaction with a conditional `UPDATE … WHERE paid_amount + x ≤ total` per
+  invoice, so two confirmations can never overpay an invoice; amounts not allocated stay visible as customer credit.
+  Duplicate submissions: same Idempotency-Key → same payment; same method + reference → `409 DUPLICATE_PAYMENT`;
+  parallel confirmations of one payment apply it once. An order becomes completed when every billing milestone is
+  invoiced and paid.
+- **Receivables:** per customer outstanding, overdue, oldest due date and unapplied credit (`GET /receivables`).
+- **Tax documents:** `POST /invoices/{id}/tax-invoice` returns `403 TAX_DOCUMENTS_DISABLED` while
+  `QTC_TAX_DOCUMENTS_ENABLED` is false (default, server configuration only, not a UI setting); even when set it
+  returns `501` because issuance is not built. Invoice documents state "ไม่ใช่ใบกำกับภาษีหรือใบเสร็จรับเงิน".
+
+### Credit notes and cancellation (design, not built)
+
+- **Unpaid invoice:** cancel (built). The number stays in the sequence as cancelled; a replacement gets a new number.
+- **Paid or partly paid invoice:** never edited or cancelled. A **credit note** (`credit_notes` + `credit_note_lines`)
+  references the invoice, its own number series (`CN-YYYY-NNNN`), a reason, and an amount ≤ the invoice total minus
+  earlier credits; issued by owner / admin; it reduces the invoice's balance (credit ≤ paid becomes customer credit or
+  a refund record). VAT on a credit note mirrors the original lines proportionally, with the same rounding rules.
+- **Confirmed payment entered by mistake:** a **reversal** record (owner / admin, reason required) that re-opens the
+  allocations; the original payment stays in history.
+- **Tax-document versions** (ใบกำกับภาษี, ใบลดหนี้ for tax purposes, ใบเสร็จรับเงิน) require verified formats, numbering
+  and retention rules under the Revenue Code before `QTC_TAX_DOCUMENTS_ENABLED` may be turned on.
+
+### API added
+
+`GET/POST /orders` (filters: status, customer, quotation) · `GET /orders/{id}` · `POST /orders/{id}/cancel` (owner /
+admin) · `POST /orders/{id}/milestones/{mid}/done` · `GET/POST /invoices` (filters incl. open, overdue) ·
+`GET /invoices/{id}` · `POST /invoices/{id}/issue` · `POST /invoices/{id}/cancel` (owner / admin) ·
+`POST /invoices/{id}/tax-invoice` (disabled) · `GET /invoices/{id}/document` · `GET/POST /payments` ·
+`GET /payments/{id}` · `POST /payments/{id}/confirm` · `/reject` (owner / admin) · `POST/GET /payments/{id}/evidence` ·
+`GET /receivables`.
+
+### Frontend added
+
+Tabs **Orders**, **Invoices**, **Payments**; "Create sales order" on accepted quotations (billing schedule editor,
+exact 100 % check on the digits); order detail (billing parts with "draft invoice", delivery milestones, cancel);
+invoice list (all / unpaid / overdue / …) and detail (issue, cancel, PDF / DOCX, balance, pending payments, "not a
+tax invoice" notice); payments (record with allocations to the customer's unpaid invoices and the credit left over,
+computed in satang without floats; attach evidence; confirm / reject).
+
+### Phase C tests
+
+| Suite | Result |
+|---|---|
+| `tests/test_qtc_phase_c.py` on SQLite | 17 passed (run 3×) |
+| All QTC (A + B + C) + concurrency on **PostgreSQL 17** | 72 passed (run 2×) |
+| Migrations `0006 → 0010` on PostgreSQL | upgrade, `alembic check` clean, downgrade, upgrade |
+| Full backend suite | 162 passed |
+| Frontend | 116 passed (4 new: schedule percentages, order creation, badges) · lint, types, build (26 pages) |
+| Browser (dev stack) | QT-2026-0001 → SO-2026-0001 with 30 / 70 % (14,926.66 + 34,828.88 = 49,755.54) and two delivery milestones → deposit invoice drafted, issued as INV-2026-0001 (due in 30 days, "not a tax invoice") → payment of 10,000 recorded (pending) and confirmed through the page → invoice partly paid, balance 4,926.66, receivables 4,926.66; invoice PDF downloaded |
+
+Covered: quote-to-order conversion, duplicate and parallel conversion, schedule rounding and validation, invoice
+numbering on issue, one invoice per milestone, whole-order invoices, draft documents withheld from integrations,
+partial and full payments, overpayments (refused per invoice, kept as credit overall), parallel confirmations, duplicate
+submissions, evidence never confirming, invoice cancellation rules, overdue, financial reconciliation (every baht on
+an invoice traced to a confirmed allocation; payments = allocations + credit; outstanding = total − applied), tenant
+isolation. Found and fixed while testing: the session does not autoflush, so the order-completion check read stale
+invoice statuses (flush added).
 
 ## Phase B: what exists
 
@@ -202,7 +287,7 @@ deliberately has no such sending.
 
 ```powershell
 cd apps/api
-uv run alembic upgrade head          # applies 0007, 0008 and 0009
+uv run alembic upgrade head          # applies 0007 to 0010
 uv run python -m app.cli seed-qtc-demo   # optional example data
 ```
 

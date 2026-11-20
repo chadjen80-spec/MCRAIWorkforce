@@ -27,7 +27,7 @@ export default function QtcOverviewPage() {
     return { customers: customers.total, quotesWaiting: waiting.total, services: services.total, priceList: lists.items.find((p) => p.is_default) ?? lists.items[0] ?? null };
   });
   const d = data.data;
-  const planned = ["qtc.overview.orders", "qtc.overview.invoices", "qtc.overview.dashboard"] as const;
+  const planned = ["qtc.overview.dashboard"] as const;
 
   return (
     <QtcShell>

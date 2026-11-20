@@ -59,7 +59,21 @@ def _customer_lines(c: dict[str, Any]) -> list[str]:
     return [x for x in lines if x]
 
 
-def render_pdf(snap: dict[str, Any], seller: dict[str, Any], *, draft: bool) -> bytes:
+QUOTATION_LABELS = {
+    "title": "ใบเสนอราคา\nQUOTATION", "title_line": "ใบเสนอราคา / QUOTATION", "doc_name": "ใบเสนอราคา",
+    "date2_label": "ยืนราคาถึง", "date2_key": "valid_until", "note": "",
+    "sign_left": "ผู้เสนอราคา", "sign_right": "ผู้อนุมัติสั่งซื้อ (ลูกค้า)",
+}
+INVOICE_LABELS = {
+    "title": "ใบแจ้งหนี้\nINVOICE", "title_line": "ใบแจ้งหนี้ / INVOICE", "doc_name": "ใบแจ้งหนี้",
+    "date2_label": "ครบกำหนดชำระ", "date2_key": "due_date",
+    "note": "เอกสารนี้เป็นใบแจ้งหนี้ ไม่ใช่ใบกำกับภาษีหรือใบเสร็จรับเงิน",
+    "sign_left": "ผู้วางบิล", "sign_right": "ผู้รับวางบิล",
+}
+
+
+def render_pdf(snap: dict[str, Any], seller: dict[str, Any], *, draft: bool, labels: dict[str, str] | None = None) -> bytes:
+    lab = labels or QUOTATION_LABELS
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_LEFT, TA_RIGHT
     from reportlab.lib.pagesizes import A4
@@ -96,11 +110,11 @@ def render_pdf(snap: dict[str, Any], seller: dict[str, Any], *, draft: bool) -> 
         canvas.restoreState()
 
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=16 * mm, bottomMargin=18 * mm,
-                            title=f"ใบเสนอราคา {snap['number']}", author=seller.get("legal_name") or seller.get("name") or "")
+                            title=f"{lab['doc_name']} {snap['number']}", author=seller.get("legal_name") or seller.get("name") or "")
     dark = colors.HexColor("#0F172A")
     story: list[Any] = []
     head = Table(
-        [[p("\n".join(_seller_lines(seller)), 9), p("ใบเสนอราคา\nQUOTATION", 16, font="MCR-Bold", align=TA_RIGHT, color=dark)]],
+        [[p("\n".join(_seller_lines(seller)), 9), p(lab["title"], 16, font="MCR-Bold", align=TA_RIGHT, color=dark)]],
         colWidths=[110 * mm, 64 * mm],
     )
     head.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
@@ -109,7 +123,7 @@ def render_pdf(snap: dict[str, Any], seller: dict[str, Any], *, draft: bool) -> 
     meta = Table(
         [[p("ลูกค้า", 8.5, font="MCR-Bold"), p("เลขที่", 8.5, font="MCR-Bold"), p(number, 9)],
          [p("\n".join(_customer_lines(snap["customer"])), 9), p("วันที่", 8.5, font="MCR-Bold"), p(thai_date(snap["issue_date"]), 9)],
-         ["", p("ยืนราคาถึง", 8.5, font="MCR-Bold"), p(thai_date(snap["valid_until"]), 9)]],
+         ["", p(lab["date2_label"], 8.5, font="MCR-Bold"), p(thai_date(snap[lab["date2_key"]]), 9)]],
         colWidths=[100 * mm, 26 * mm, 48 * mm],
     )
     meta.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("SPAN", (0, 1), (0, 2)),
@@ -145,19 +159,23 @@ def render_pdf(snap: dict[str, Any], seller: dict[str, Any], *, draft: bool) -> 
     story += [totals, p(f"({thai_baht_text(Decimal(t['total']))})", 9.5, align=TA_RIGHT), Spacer(1, 5 * mm)]
     if snap["prices_include_vat"]:
         story.append(p("ราคาในรายการรวมภาษีมูลค่าเพิ่มแล้ว", 8.5, color=colors.HexColor("#475569")))
+    if lab["note"]:
+        story.append(p(lab["note"], 8.5, font="MCR-Bold", color=colors.HexColor("#475569")))
     for label, text in (("หมายเหตุ", snap.get("notes")), ("เงื่อนไข", snap.get("terms"))):
         if text:
             story += [p(label, 9, font="MCR-Bold"), p(text, 9), Spacer(1, 2 * mm)]
     story.append(Spacer(1, 14 * mm))
-    sign = Table([[p("ผู้เสนอราคา\n\n\n.................................................\n(ผู้มีอำนาจลงนาม)", 9, align=TA_RIGHT),
-                   p("ผู้อนุมัติสั่งซื้อ (ลูกค้า)\n\n\n.................................................\nวันที่ ......../......../........", 9, align=TA_RIGHT)]],
+    dots = "\n\n\n.................................................\n"
+    sign = Table([[p(lab["sign_left"] + dots + "(ผู้มีอำนาจลงนาม)", 9, align=TA_RIGHT),
+                   p(lab["sign_right"] + dots + "วันที่ ......../......../........", 9, align=TA_RIGHT)]],
                  colWidths=[87 * mm, 87 * mm])
     story.append(sign)
     doc.build(story, onFirstPage=decorate, onLaterPages=decorate)
     return buf.getvalue()
 
 
-def render_docx(snap: dict[str, Any], seller: dict[str, Any], *, draft: bool) -> bytes:
+def render_docx(snap: dict[str, Any], seller: dict[str, Any], *, draft: bool, labels: dict[str, str] | None = None) -> bytes:
+    lab = labels or QUOTATION_LABELS
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml.ns import qn
@@ -176,18 +194,18 @@ def render_docx(snap: dict[str, Any], seller: dict[str, Any], *, draft: bool) ->
         return r
 
     doc = Document()
-    doc.core_properties.title = f"ใบเสนอราคา {snap['number']}"
+    doc.core_properties.title = f"{lab['doc_name']} {snap['number']}"
     doc.core_properties.author = seller.get("legal_name") or seller.get("name") or ""
     if draft:
         run(doc.add_paragraph(), "ฉบับร่าง ยังไม่อนุมัติ (DRAFT, NOT APPROVED)", 12, True, RGBColor(0xDC, 0x26, 0x26))
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    run(title, "ใบเสนอราคา / QUOTATION", 16, True)
+    run(title, lab["title_line"], 16, True)
     for line in _seller_lines(seller):
         run(doc.add_paragraph(), line, 9)
     info = doc.add_table(rows=0, cols=2)
     for k, v in (("เลขที่", snap["number"] + (f" (ฉบับแก้ไข {snap['revision']})" if snap["revision"] > 1 else "")),
-                 ("วันที่", thai_date(snap["issue_date"])), ("ยืนราคาถึง", thai_date(snap["valid_until"])),
+                 ("วันที่", thai_date(snap["issue_date"])), (lab["date2_label"], thai_date(snap[lab["date2_key"]])),
                  ("ลูกค้า", "\n".join(_customer_lines(snap["customer"])))):
         cells = info.add_row().cells
         run(cells[0].paragraphs[0], k, 9, True)
@@ -217,13 +235,15 @@ def render_docx(snap: dict[str, Any], seller: dict[str, Any], *, draft: bool) ->
     par = doc.add_paragraph()
     par.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     run(par, f"({thai_baht_text(Decimal(t['total']))})", 10)
+    if lab["note"]:
+        run(doc.add_paragraph(), lab["note"], 9, True)
     for heading, body in (("หมายเหตุ", snap.get("notes")), ("เงื่อนไข", snap.get("terms"))):
         if body:
             run(doc.add_paragraph(), heading, 10, True)
             run(doc.add_paragraph(), str(body), 10)
     sign = doc.add_table(rows=1, cols=2)
-    run(sign.rows[0].cells[0].paragraphs[0], "ผู้เสนอราคา\n\n\n....................................\n(ผู้มีอำนาจลงนาม)", 9)
-    run(sign.rows[0].cells[1].paragraphs[0], "ผู้อนุมัติสั่งซื้อ (ลูกค้า)\n\n\n....................................\nวันที่ ......../......../........", 9)
+    run(sign.rows[0].cells[0].paragraphs[0], lab["sign_left"] + "\n\n\n....................................\n(ผู้มีอำนาจลงนาม)", 9)
+    run(sign.rows[0].cells[1].paragraphs[0], lab["sign_right"] + "\n\n\n....................................\nวันที่ ......../......../........", 9)
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()

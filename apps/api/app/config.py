@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     # Explicit demo mode: when an AI provider is not configured, agents may emit clearly
     # labelled demo output (is_demo=true) instead of failing. Never enabled implicitly.
     demo_mode: bool = False
+    # Quote-to-Cash: tax invoices and receipts (ใบกำกับภาษี / ใบเสร็จรับเงิน) are NOT issued by the system until
+    # Thai legal and accounting requirements (Revenue Code formats, numbering, e-Tax rules) are verified.
+    qtc_tax_documents_enabled: bool = False
     default_job_budget_usd: Decimal = Decimal("5")
     default_monthly_budget_usd: Decimal = Decimal("50")
 

@@ -229,3 +229,87 @@ export const lineFromQuotation = (l: QuotationLine): LineDraft => ({
   unit_price: l.price_source === "manual" && l.unit_price ? formatAmount(l.unit_price).replace(/,/g, "") : "",
   discount_percent: trimZeros(l.discount_percent),
 });
+
+// ---- orders, invoices, payments (Phase C) -----------------------------------------------------------
+export interface Milestone {
+  id: string;
+  position: number;
+  kind: "deposit" | "installment" | "final" | "delivery";
+  description: string;
+  due_date: string | null;
+  amount_net: string;
+  amount_vat: string;
+  amount_total: string;
+  status: "pending" | "invoiced" | "done" | "cancelled";
+  invoice_id: string | null;
+}
+
+export interface Order {
+  id: string;
+  number: string;
+  status: "open" | "completed" | "cancelled";
+  quotation_id: string;
+  quotation_number: string;
+  quotation_revision: number;
+  customer: { id: string; code: string; name: string };
+  grand_total: string;
+  vat_total: string;
+  invoiced_total: string;
+  paid_total: string;
+  created_at: string;
+  lines: { position: number; description: string; unit: string; quantity: string; line_total: string }[];
+  milestones: Milestone[];
+}
+
+export type InvoiceStatus = "draft" | "issued" | "partially_paid" | "paid" | "cancelled" | "overdue";
+
+export interface Invoice {
+  id: string;
+  number: string | null;
+  status: InvoiceStatus;
+  order_id: string;
+  order_number: string;
+  customer: { id: string; code: string; name: string };
+  issue_date: string | null;
+  due_date: string | null;
+  vat_rate: string;
+  subtotal: string;
+  vat_total: string;
+  total: string;
+  paid_amount: string;
+  balance: string;
+  pending_payments: string;
+  amount_in_words: string;
+  lines: { position: number; description: string; quantity: string; unit: string; line_total: string }[];
+  allocations: { payment_id: string; payment_number: string; amount: string; status: string; received_on: string }[];
+}
+
+export interface Payment {
+  id: string;
+  number: string;
+  status: "pending_confirmation" | "confirmed" | "rejected";
+  customer: { id: string; code: string; name: string };
+  amount: string;
+  allocated: string;
+  unallocated: string;
+  received_on: string;
+  method: string;
+  reference: string;
+  has_evidence: boolean;
+  evidence_name: string | null;
+  recorded_by: string;
+  confirmed_by: string | null;
+  rejected_reason: string | null;
+  allocations: { invoice_id: string; invoice_number: string | null; amount: string }[];
+}
+
+/** A billing schedule typed as percentages; valid only when they add up to exactly 100 (checked on the digits). */
+export function percentsTotal(values: string[]): string | null {
+  let hundredths = 0;
+  for (const v of values) {
+    if (!/^\d{1,3}(\.\d{1,2})?$/.test(v.trim())) return null;
+    const [i, f = ""] = v.trim().split(".");
+    hundredths += Number(i) * 100 + Number(f.padEnd(2, "0"));
+  }
+  return `${Math.floor(hundredths / 100)}.${String(hundredths % 100).padStart(2, "0")}`;
+}
