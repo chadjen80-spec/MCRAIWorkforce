@@ -8,7 +8,7 @@ from typing import Any
 
 from sqlalchemy import update
 
-from app.agents import content, document, image, planner, qa, video
+from app.agents import registry
 from app.agents.base import AgentContext
 from app.db import new_session
 from app.errors import AgentError, JobCancelled
@@ -17,14 +17,8 @@ from app.services import orchestrator
 
 log = logging.getLogger("mcr.worker")
 
-AGENTS: dict[str, Callable[[AgentContext], dict[str, Any]]] = {
-    "planner": planner.run,
-    "content": content.run,
-    "image": image.run,
-    "document": document.run,
-    "video": video.run,
-    "qa": qa.run,
-}
+# Built from the agent registry (same six runners as before; Quote-to-Cash agents are not job agents).
+AGENTS: dict[str, Callable[[AgentContext], dict[str, Any]]] = registry.creative_runners()
 
 
 def execute_task(task_id: uuid.UUID) -> None:

@@ -1,6 +1,6 @@
 # Quote-to-Cash: implementation report
 
-Date: 2026-11-20 · Phases A (`2186a66`) and B (`0725dd2`) on `main`; Phase C in the working tree (uncommitted at the time of writing)
+Date: 2026-11-20 · Phases A (`2186a66`), B (`0725dd2`) and C (`abd86aa`) on `main`; Phase D in the working tree (uncommitted at the time of writing)
 
 ## Status by phase
 
@@ -9,10 +9,103 @@ Date: 2026-11-20 · Phases A (`2186a66`) and B (`0725dd2`) on `main`; Phase C in
 | **A** | Customer CRM, service catalogue, rate cards (price lists), audit, numbering | **Done and tested** (SQLite and PostgreSQL) |
 | **B** | Quotation engine, approval, revisions, acceptance, Thai PDF / DOCX | **Done and tested** (SQLite and PostgreSQL) |
 | **C** | Sales orders, billing schedule, invoices, payments, receivables | **Done and tested** (SQLite and PostgreSQL); credit notes and tax documents **designed, not built** |
-| D | AI agents (SalesIntake, Quotation, Finance, Collection) and Mira | Not started |
+| **D** | AI agents (SalesIntake, Quotation, Finance, Collection), agent registry, Mira intents | **Done and tested** (SQLite, PostgreSQL, browser); sending reminders is **not available, by design** |
 | E | n8n workflows, QTC dashboard, end-to-end tests | Not started |
 
-Nothing beyond Phase C is claimed. The `/qtc` overview lists the dashboard (Phase E) as "Planned" text.
+Nothing beyond Phase D is claimed. The `/qtc` overview lists the dashboard (Phase E) as "Planned" text.
+
+## Phase D: what exists
+
+No migration: Phase D uses the `payment_reminders` table from migration `0010`.
+
+### Agent registry (`app/agents/registry.py`)
+
+- One `AgentSpec` per agent: name, family (`creative` or `qtc`), description, queue.
+- The six creative agents (planner, content, image, document, video, qa) are registered with their existing runners
+  and queues. `app.worker.runner.AGENTS` is now built from the registry and is identical to before (tested).
+- The four QTC agents are family `qtc`. They are not job agents: they run when Mira or the API asks, with a
+  `QtcAgentContext` (organization, actor, language, `use_ai`). Duplicate names are refused.
+- `GET /v1/qtc/agents` lists them all.
+
+### Agents (`app/qtc/agents.py`)
+
+| Agent | What it does | AI |
+|---|---|---|
+| SalesIntakeAgent | Reads an inquiry: the matching customer (or candidates, or new-customer details), email / phone, requested catalogue services, items not in the catalogue | Optional extraction into `IntakeModel` (no price fields) |
+| QuotationAgent | Builds a draft-quotation **proposal**: customer, catalogue lines priced only from the approved default price list, "needs a price" for the rest | Optional: names extra requested items (descriptions only) |
+| FinanceAgent | Quotations waiting for approval; customers who have not paid (outstanding, overdue); receivables this month (outstanding, overdue, invoiced, received) | None: exact database queries |
+| CollectionAgent | Lists overdue invoices; on confirmation creates reminder **drafts** | Optional wording, used only if it passes validation |
+
+Rules that hold for all of them:
+
+- **Structured outputs.** Every AI answer is parsed into a Pydantic schema (`complete_json`); invalid output is
+  discarded and the deterministic result is used.
+- **No AI numbers.** The AI schemas have no price or amount fields; extra keys are ignored (tested with a model that
+  sends `unit_price`). Prices come from the approved list, figures from queries.
+- **Reminder text validation** (`reminder_text_ok`): AI wording is used only if it names the invoice number and
+  every amount in it equals the exact balance; otherwise the Thai / English template is used. The audit event
+  records `ai_text_used`.
+- **Cost tracking.** AI calls use the organization's OpenAI provider, are refused once the monthly budget is used,
+  and are recorded as `UsageEvent`s under the agent's name. AI runs only when the caller asks (`use_ai: true`); by
+  default the agents are deterministic and free.
+- **Proposals, not writes.** No agent creates a quotation or reminder by itself.
+
+### Mira intents (`app/qtc/assistant_api.py`)
+
+`POST /v1/qtc/assistant {text, language}` classifies the text with fixed Thai / English rules:
+
+| Command (example) | Intent | Answer |
+|---|---|---|
+| สร้างใบเสนอราคางาน Production ให้ลูกค้า ABC | `create_quotation` | Proposal + `confirm` |
+| ตรวจสอบใบเสนอราคาที่ยังไม่อนุมัติ | `pending_quotations` | Immediate answer |
+| ลูกค้ารายไหนยังไม่จ่ายเงิน | `unpaid_customers` | Immediate answer |
+| สรุปยอดลูกหนี้เดือนนี้ | `receivables_summary` | Immediate figures |
+| เตรียมข้อความติดตามเงินสำหรับ Invoice ที่เกินกำหนด | `collection_drafts` | Overdue list + `confirm` |
+| anything else | `null` | Mira's existing creative flow, unchanged |
+
+- A quotation request must mention a customer ("ลูกค้า" / "customer"), so the creative Quick Action
+  "ใบเสนอราคา PDF สำหรับ…" still goes to the Document Agent (tested with poster, video and caption commands too).
+- `POST /v1/qtc/assistant/confirm {action, payload, idempotency_key}` needs a signed-in person (service keys get
+  403). `create_quotation` goes through the normal quotation endpoint (approved prices, numbering, audit,
+  idempotency: confirming twice gives one quotation). `draft_reminders` drafts only for the caller's own overdue
+  invoices.
+
+### Reminders
+
+- `GET /v1/qtc/reminders`, `PATCH /reminders/{id}` (edit a draft), `POST /reminders/{id}/approve` (owner / admin),
+  `POST /reminders/{id}/cancel`.
+- Channel: `email` or `line` only when the primary contact agreed to that channel and has the address; otherwise
+  `manual` (a person delivers it).
+- `POST /reminders/{id}/send` always returns **403 `EXTERNAL_SENDING_DISABLED`**. The system sends nothing to
+  customers; sending needs consent records, scoped credentials and an approval gate first.
+- `POST /v1/qtc/agents/sales-intake` (for n8n in Phase E) reads an inquiry and creates nothing; the call is audited.
+
+### Frontend (Mira)
+
+- `lib/qtcAssistant.ts`: before her usual confirm step, Mira asks `/v1/qtc/assistant`. A recognised command is
+  answered at once; any error or `intent: null` falls through to the existing creative flow.
+- `components/assistant/QtcResultCard.tsx`: her answer, the lines (with "needs a price"), items, receivable figures,
+  a link to the page, and Confirm / Cancel for proposals. Reminder proposals say that nothing is sent.
+- Voice: a proposal runs only on an explicit spoken yes (`qtcDecision`); "no" cancels; anything else is asked again.
+  Barge-in during a proposal listens for that yes / no. The buttons are disabled while a confirm request is running.
+
+### Phase D tests
+
+| Suite | Result |
+|---|---|
+| `tests/test_qtc_phase_d.py` on SQLite | 28 passed |
+| All QTC tests (A–D) on **PostgreSQL 17** (Docker) | 92 passed |
+| Full backend suite | 190 passed |
+| Frontend (Vitest) | 123 passed (7 new: intent client, fall-through on failure, idempotent confirm, spoken yes / no, result card) |
+| ruff, mypy, ESLint, TypeScript, `next build` | clean |
+| Browser (dev stack) | "ลูกค้ารายไหนยังไม่จ่ายเงิน" answered from real data (4,926.66 outstanding); the quotation request showed a proposal priced from the approved list, and Cancel created nothing; a poster command still got Mira's usual confirm prompt and poster offer |
+
+Covered: registry compatibility, the five intents plus creative fall-through, prices never invented, AI output
+validation (extra items, reminder text), AI only when asked and costed, finance figures (a payment counts only once
+confirmed), consent channels, approval roles, sending refused, tenant isolation, confirmation before writes.
+
+Not tested: the spoken yes / no in a real browser (the Browser pane blocks the microphone; the logic is
+unit-tested), and AI extraction against a real model (only a fake transport).
 
 ## Phase C: what exists
 
@@ -260,7 +353,7 @@ brief (quote revision, quote-to-order, payments, overpayments, cancellation, rec
 belong to phases B–D (quote revision is now covered by Phase B; the rest is **not tested yet** because it is not
 built yet).
 
-## Security review (Phases A and B)
+## Security review (Phases A to D)
 
 - Quotations: approval by signed-in owner / admin only (members and service keys get 403); self-approval is allowed
   for small teams but recorded (`self_approved` in the audit event); unapproved documents are never rendered for
@@ -275,7 +368,10 @@ built yet).
 - Prices: only approved lists will price quotations; approved lists cannot be edited; every price change is audited
   with before / after.
 - Input: strict schemas (`extra="forbid"`), float amounts refused, tax ID checksum, code patterns.
-- No external sending exists yet, so nothing can be delivered outside the app.
+- No external sending exists, so nothing can be delivered outside the app. Phase D reminder drafts can be approved,
+  but `send` always returns 403.
+- Agents (Phase D): AI schemas carry no prices or amounts, AI text is validated before use, AI runs only on request
+  and within budget, and anything that writes needs a signed-in person to confirm.
 
 Open hardening items that will block external operations in later phases (from
 `docs/PRODUCTION_HARDENING_REPORT.md`): no API-key revocation command; Windows worker pool without hard time limits;

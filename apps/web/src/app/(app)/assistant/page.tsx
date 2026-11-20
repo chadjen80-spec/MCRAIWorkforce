@@ -10,6 +10,7 @@ import { LogoUploadButton } from "@/components/LogoUploadButton";
 import { CommandComposer } from "@/components/assistant/CommandComposer";
 import { FocusStrip, ModeToggle } from "@/components/assistant/ModeToggle";
 import { OpsSummary, StartGuide, TaskSuggestions } from "@/components/assistant/OpsPanel";
+import { QtcResultCard } from "@/components/assistant/QtcResultCard";
 import { QuickActions } from "@/components/assistant/QuickActions";
 import { Button, DemoBadge, buttonClass, cx } from "@/components/ui";
 import { JobStatusBadge } from "@/components/status";
@@ -48,6 +49,7 @@ import type {
   Task,
 } from "@/lib/types";
 import { POSTER_WORDS, confirmAction, posterIntent } from "@/lib/intent";
+import { askQtc, confirmQtc, qtcDecision, type QtcAnswer } from "@/lib/qtcAssistant";
 import { useApi } from "@/lib/useApi";
 import { VoiceError, canListen, listenOnce, speak } from "@/lib/voice";
 import { isFirstRun, workflowById, type Workflow, type WorkflowId } from "@/lib/workflows";
@@ -58,6 +60,8 @@ import { isFirstRun, workflowById, type Workflow, type WorkflowId } from "@/lib/
 
 const SETTLED: readonly JobStatus[] = ["awaiting_approval", "completed", "partial", "failed", "cancelled", "rejected"];
 
+type QtcItem = { answer: QtcAnswer; waiting: boolean; key: string };
+
 export default function AssistantPage() {
   const { t, locale } = useI18n();
   const router = useRouter();
@@ -67,6 +71,9 @@ export default function AssistantPage() {
   const [bubble, setBubble] = useState<string | null>(null);
   const [heard, setHeard] = useState("");
   const [pending, setPending] = useState<string | null>(null);
+  // A sales / finance answer from the Quote-to-Cash agents; `waiting` while its proposal needs a yes.
+  const [qtc, setQtc] = useState<QtcItem | null>(null);
+  const [qtcRunning, setQtcRunning] = useState(false);
   const [busy, setBusy] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [settledJob, setSettledJob] = useState<string | null>(null);
@@ -263,9 +270,65 @@ export default function AssistantPage() {
     await say(t("posterStage.closed"), signal);
   };
 
+  // --- sales and finance commands (Quote-to-Cash agents) ------------------------------------
+  // Recognised by fixed rules on the server; questions answer at once from real records, and anything that
+  // writes is a proposal that runs only on an explicit yes. Nothing is ever sent to customers.
+  const handleQtc = async (answer: QtcAnswer, signal: AbortSignal) => {
+    setPending(null);
+    const item: QtcItem = { answer, waiting: Boolean(answer.confirm), key: newIdempotencyKey() };
+    setQtc(item);
+    await say(answer.reply, signal);
+    if (item.waiting) await awaitQtcDecision(item, signal);
+  };
+  const runQtc = async (item: QtcItem, signal: AbortSignal) => {
+    if (!item.answer.confirm || qtcRunning) return;
+    setQtcRunning(true);
+    setMode("thinking");
+    try {
+      const done = await confirmQtc(item.answer.confirm, locale, item.key);
+      setQtc({ answer: done, waiting: false, key: item.key });
+      await say(done.reply, signal);
+    } catch (err) {
+      await say(t("qtcMira.failed", { message: toApiError(err).message }), signal);
+    } finally {
+      setQtcRunning(false);
+    }
+  };
+  const dropQtc = async (signal: AbortSignal) => {
+    setQtc(null);
+    await say(t("qtcMira.cancelled"), signal);
+  };
+  const awaitQtcDecision = async (item: QtcItem, signal: AbortSignal) => {
+    if (signal.aborted || !canListen()) return; // no microphone: the Confirm / Cancel buttons remain
+    try {
+      const verdict = qtcDecision(await hear(signal), locale);
+      if (verdict === "yes") await runQtc(item, signal);
+      else if (verdict === "no") await dropQtc(signal);
+      else await say(t("assistant.unclear"), signal);
+    } catch (e) {
+      if (!(e instanceof VoiceError) || e.code === "failed" || e.code === "network") await reportVoiceError(e, signal);
+    }
+  };
+  const confirmQtcCard = async () => {
+    if (!qtc?.waiting) return;
+    const signal = begin();
+    await runQtc(qtc, signal);
+    end(signal);
+  };
+  const cancelQtcCard = async () => {
+    const signal = begin();
+    await dropQtc(signal);
+    end(signal);
+  };
+
   const propose = async (command: string, signal: AbortSignal) => {
     const text = command.trim().slice(0, 4000);
     if (text.length < 5) return say(t("assistant.tooShort"), signal);
+    setQtc(null);
+    setMode("thinking");
+    const answer = await askQtc(text, locale, signal);
+    if (signal.aborted) return;
+    if (answer) return handleQtc(answer, signal);
     setPending(text);
     const poster = POSTER_WORDS.test(text);
     await say(t("assistant.confirm", { command: text }) + (poster ? ` ${t("assistant.posterOffer")}` : ""), signal);
@@ -352,6 +415,7 @@ export default function AssistantPage() {
       return;
     }
     setPending(null);
+    setQtc(null);
     setJobId(null);
     try {
       // One press: NEW CHAT always listens straight away. (The spoken welcome plays when the screen
@@ -371,6 +435,7 @@ export default function AssistantPage() {
     const signal = begin();
     try {
       if (posterMode) await listenForDesign(signal);
+      else if (qtc?.waiting) await awaitQtcDecision(qtc, signal);
       else if (pending) await awaitDecision(pending, signal);
       else await propose(await hear(signal), signal);
     } catch (e) {
@@ -973,6 +1038,9 @@ export default function AssistantPage() {
         </div>
 
         <div className="space-y-3">
+          {qtc && (
+            <QtcResultCard answer={qtc.answer} waiting={qtc.waiting} busy={qtcRunning} onConfirm={confirmQtcCard} onCancel={cancelQtcCard} />
+          )}
           {pending && !busy && (
             <div className="rounded-2xl border border-warn/50 bg-warn/10 p-3 sm:p-4">
               <p className={cx("text-sm font-semibold text-warn", locale === "en" && "uppercase tracking-wide")}>{t("assistant.pendingLabel")}</p>
