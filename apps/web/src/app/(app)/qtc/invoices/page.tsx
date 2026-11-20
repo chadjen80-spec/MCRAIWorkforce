@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { InvoiceStatusBadge } from "@/components/qtc/BillingParts";
 import { QtcError, QtcShell } from "@/components/qtc/QtcShell";
-import { EmptyState, LoadingBlock, Pagination } from "@/components/ui";
+import { EmptyState, LoadingBlock, Pagination, buttonClass } from "@/components/ui";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/dictionaries";
 import { api } from "@/lib/api";
@@ -22,7 +22,13 @@ export default function InvoicesPage() {
     api<Page<Invoice>>("/v1/qtc/invoices", { query: { status: status === "all" ? undefined : status, limit: LIMIT, offset }, signal }),
   );
   return (
-    <QtcShell>
+    <QtcShell
+      actions={
+        <Link href="/qtc/invoices/new" className={buttonClass("primary")}>
+          {t("qtc.i.new")}
+        </Link>
+      }
+    >
       <p className="mb-4 rounded-xl border border-line bg-surface p-3 text-xs leading-relaxed text-dim">{t("qtc.i.notTax")}</p>
       <div role="group" aria-label={t("jobs.filter")} className="mb-4 flex flex-wrap gap-1.5">
         {FILTERS.map((f) => (

@@ -7,6 +7,7 @@ import { ErrorState, PageHeader, cx } from "@/components/ui";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/dictionaries";
 import type { ApiError } from "@/lib/api";
+import { QtcVoice } from "./QtcVoice";
 
 // Only sections that exist are linked; later phases (dashboard) are added
 // here as they are built.
@@ -26,7 +27,16 @@ export function QtcShell({ children, actions }: { children: ReactNode; actions?:
   const active = (href: string) => (href === "/qtc" ? pathname === "/qtc" : pathname === href || pathname.startsWith(`${href}/`));
   return (
     <div lang={locale}>
-      <PageHeader title={t("qtc.title")} subtitle={t("qtc.subtitle")} actions={actions} />
+      <PageHeader
+        title={t("qtc.title")}
+        subtitle={t("qtc.subtitle")}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <QtcVoice />
+            {actions}
+          </div>
+        }
+      />
       <nav aria-label={t("qtc.title")} className="mb-5 flex flex-wrap gap-1 border-b border-line">
         {TABS.map((tab) => (
           <Link

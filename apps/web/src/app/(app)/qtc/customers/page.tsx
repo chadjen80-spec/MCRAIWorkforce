@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { CustomerForm, emptyDraft } from "@/components/qtc/CustomerForm";
 import { QtcError, QtcShell } from "@/components/qtc/QtcShell";
@@ -17,7 +18,15 @@ export default function CustomersPage() {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<"active" | "archived" | "all">("active");
   const [offset, setOffset] = useState(0);
-  const [creating, setCreating] = useState(false);
+  // `?new=1` (e.g. from a voice command) opens the form; closing it clears the parameter.
+  const router = useRouter();
+  const params = useSearchParams();
+  const [openedHere, setCreatingState] = useState(false);
+  const creating = openedHere || params.get("new") === "1";
+  const setCreating = (open: boolean) => {
+    setCreatingState(open);
+    if (!open && params.get("new")) router.replace("/qtc/customers");
+  };
   // One key per opened form: a double-click or a retry after a timeout cannot create the customer twice.
   const [idemKey, setIdemKey] = useState(newIdempotencyKey);
   const list = useApi<Page<Customer>>(`qtc:customers:${q}:${status}:${offset}`, (signal) =>

@@ -16,6 +16,12 @@ interface Setup {
   hasPriceList: boolean;
 }
 
+/** Every line has a price: typed by a person, or from the approved price list for its service. */
+function allPriced(lines: LineDraft[], services: Service[]): boolean {
+  const listed = new Map(services.map((x) => [x.id, x.default_price]));
+  return lines.length > 0 && lines.every((l) => l.unit_price.trim() !== "" || Boolean(l.service_id && listed.get(l.service_id)));
+}
+
 export default function NewQuotationPage() {
   const { t } = useI18n();
   const router = useRouter();
@@ -35,19 +41,29 @@ export default function NewQuotationPage() {
   const [error, setError] = useState<ApiError | null>(null);
   const [idemKey] = useState(newIdempotencyKey);
 
-  const create = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const [busyAction, setBusyAction] = useState<"draft" | "submit" | null>(null);
+
+  // "Submit for approval" creates the draft and submits it in one step. The idempotency key makes a retry after
+  // a failed submit reuse the same draft instead of creating a second quotation.
+  const save = async (submit: boolean) => {
     setBusy(true);
+    setBusyAction(submit ? "submit" : "draft");
     setError(null);
     try {
       const body: Record<string, unknown> = { customer_id: customerId, title, brief };
       if (lines.length) body.lines = linesBody(lines);
       const q = await api<Quotation>("/v1/qtc/quotations", { method: "POST", body, headers: { "Idempotency-Key": idemKey } });
+      if (submit) await api<Quotation>(`/v1/qtc/quotations/${q.id}/submit`, { method: "POST" });
       router.push(`/qtc/quotations/${q.id}`);
     } catch (err) {
       setError(toApiError(err));
       setBusy(false);
+      setBusyAction(null);
     }
+  };
+  const create = (e: React.FormEvent) => {
+    e.preventDefault();
+    void save(false);
   };
 
   const s = setup.data;
@@ -90,9 +106,23 @@ export default function NewQuotationPage() {
               <p className="mb-2 text-xs text-dim">{t("qtc.q.priceHint")}</p>
               <LineEditor lines={lines} onChange={setLines} services={s.services} />
             </div>
-            <Button type="submit" variant="primary" loading={busy} disabled={!customerId || !s.hasPriceList || !linesValid(lines)}>
-              {t("qtc.q.create")}
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="submit" loading={busyAction === "draft"} disabled={busy || !customerId || !s.hasPriceList || !linesValid(lines)}>
+                {t("qtc.q.create")}
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                loading={busyAction === "submit"}
+                disabled={busy || !customerId || !s.hasPriceList || !linesValid(lines) || !allPriced(lines, s.services)}
+                onClick={() => void save(true)}
+              >
+                {t("qtc.q.submit")}
+              </Button>
+              {customerId && lines.length > 0 && linesValid(lines) && !allPriced(lines, s.services) && (
+                <p className="text-xs text-warn">{t("qtc.q.submitNeedsPrices")}</p>
+              )}
+            </div>
           </form>
         </Card>
       )}

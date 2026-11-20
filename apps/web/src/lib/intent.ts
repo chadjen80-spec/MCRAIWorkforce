@@ -46,33 +46,58 @@ export function confirmAction(answer: string, locale: Locale, command: string): 
   return "ask_again";
 }
 
-// Saying just a page name opens that page of Sales & Finance ("ใบเสนอราคา", "Invoices", "เปิดหน้าใบแจ้งหนี้").
+// Saying just a page name opens that page of Sales & Finance (every tab, Thai or English).
 // Only the bare name, optionally with words such as "open / show / go to / เปิด / ไปที่ / หน้า", counts: a longer
 // sentence ("สร้างใบเสนอราคาให้ลูกค้า ABC", "ใบเสนอราคา PDF สำหรับแคมเปญ") keeps going to the usual flows.
 export interface QtcPage {
   path: string;
-  name: "quotations" | "invoices";
+  name: "overview" | "quotations" | "newQuotation" | "orders" | "invoices" | "newInvoice" | "payments" | "customers" | "newCustomer" | "services" | "newService";
 }
 
-const QTC_PAGES: { page: QtcPage; words: string[] }[] = [
-  { page: { path: "/qtc/quotations", name: "quotations" }, words: ["ใบเสนอราคา", "quotation", "quotations", "quote", "quotes"] },
-  { page: { path: "/qtc/invoices", name: "invoices" }, words: ["ใบแจ้งหนี้", "invoice", "invoices"] },
+// `create`: where a "want to make one" request goes (the new-quotation and new-invoice forms).
+const QTC_PAGES: { page: QtcPage; create?: QtcPage; words: string[] }[] = [
+  { page: { path: "/qtc/quotations", name: "quotations" }, create: { path: "/qtc/quotations/new", name: "newQuotation" }, words: ["ใบเสนอราคา", "quotation", "quotations", "quote", "quotes"] },
+  { page: { path: "/qtc/orders", name: "orders" }, words: ["ใบสั่งขาย", "คำสั่งขาย", "ออเดอร์", "order", "orders", "salesorder", "salesorders"] },
+  { page: { path: "/qtc/invoices", name: "invoices" }, create: { path: "/qtc/invoices/new", name: "newInvoice" }, words: ["ใบแจ้งหนี้", "invoice", "invoices"] },
+  { page: { path: "/qtc/payments", name: "payments" }, words: ["การรับชำระ", "รับชำระ", "การชำระเงิน", "ชำระเงิน", "payment", "payments"] },
+  {
+    page: { path: "/qtc/customers", name: "customers" },
+    create: { path: "/qtc/customers?new=1", name: "newCustomer" },
+    words: ["รายชื่อลูกค้า", "ลูกค้า", "customer", "customers", "client", "clients"],
+  },
+  {
+    page: { path: "/qtc/services", name: "services" },
+    create: { path: "/qtc/services?new=1", name: "newService" },
+    words: ["บริการและราคา", "รายการราคา", "ราคาบริการ", "บริการ", "ราคา", "service", "services", "pricelist", "pricelists", "price", "prices", "pricing", "ratecard", "ratecards"],
+  },
+  // Last, so a page name above always wins; "ภาพรวม" alone is the app's main dashboard, not this one.
+  {
+    page: { path: "/qtc", name: "overview" },
+    words: ["งานขายและการเงิน", "ขายและการเงิน", "ภาพรวมงานขาย", "ภาพรวมการขาย", "แดชบอร์ดการขาย", "salesandfinance", "salesfinance", "salesdashboard", "salesoverview"],
+  },
 ];
-const NAV_FILLER_EN = ["go to", "take me to", "please", "open", "show", "see", "view", "go", "the", "page", "list", "all", "my", "me"];
-const NAV_FILLER_TH = ["ขอดู", "เปิด", "ไปที่", "ไป", "ดู", "หน้า", "รายการ", "ทั้งหมด", "ให้หน่อย", "หน่อย", "ค่ะ", "คะ", "ครับ", "นะ", "ที่"];
+// "I want to do the quotations" / "ต้องการสร้างใบแจ้งหนี้" open the matching "new" form where there is one.
+const NAV_FILLER_EN = ["go to", "take me to", "would like to", "like to", "want to", "i want", "please", "open", "show", "see", "view",
+  "create", "make", "do", "new", "add", "and", "go", "the", "a", "an", "to", "i", "d", "page", "list", "all", "my", "me"];
+const NAV_FILLER_TH = ["ต้องการ", "อยาก", "สร้าง", "ทำ", "เพิ่ม", "ฉัน", "ผม", "เรา", "ขอดู", "เปิด", "ไปที่", "ไป", "ดู", "หน้า", "รายการ",
+  "ทั้งหมด", "ใหม่", "ให้หน่อย", "หน่อย", "ค่ะ", "คะ", "ครับ", "นะ", "ที่"];
+
+// Words that mean "I want to make one" rather than "show me the list".
+const CREATE_WORDS = /ต้องการ|อยาก|สร้าง|ทำ|ใหม่|เพิ่ม|\b(want|would like|like to|create|make|do|new|add)\b/i;
 
 export function qtcPageFor(text: string): QtcPage | null {
-  let s = text.toLowerCase().replace(/[.,!?;:"'“”()]/g, " ");
+  const wantsNew = CREATE_WORDS.test(text);
+  let s = text.toLowerCase().replace(/[.,!?;:"'“”()&]/g, " ");
   for (const w of NAV_FILLER_EN) s = s.replace(new RegExp(`\\b${w}\\b`, "g"), " ");
   s = s.replace(/\s+/g, "");
   // Thai filler words only around the name, so the name itself is never altered
-  for (const { page, words } of QTC_PAGES) {
+  for (const { page, create, words } of QTC_PAGES) {
     for (const word of words) {
       const i = s.indexOf(word);
       if (i < 0) continue;
       let rest = s.slice(0, i) + " " + s.slice(i + word.length);
       for (const f of NAV_FILLER_TH) rest = rest.split(f).join("");
-      if (rest.trim() === "") return page;
+      if (rest.trim() === "") return wantsNew && create ? create : page;
     }
   }
   return null;

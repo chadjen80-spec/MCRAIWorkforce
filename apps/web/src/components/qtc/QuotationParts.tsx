@@ -51,7 +51,7 @@ export function LineEditor({ lines, onChange, services }: { lines: LineDraft[]; 
             <legend className="px-1 text-xs text-dim">
               {i + 1}. {svc ? svc.code : t("qtc.q.addCustom")}
             </legend>
-            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_6rem_6rem]">
+            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_6rem_6rem_9rem]">
               <div>
                 <label htmlFor={`${l.key}-desc`} className="label">
                   {t("qtc.q.description")}
@@ -62,7 +62,7 @@ export function LineEditor({ lines, onChange, services }: { lines: LineDraft[]; 
                 <label htmlFor={`${l.key}-qty`} className="label">
                   {t("qtc.q.qty")}
                 </label>
-                <input id={`${l.key}-qty`} className="input text-right tabular-nums" inputMode="decimal" value={l.quantity} aria-invalid={qtyBad || undefined} onChange={(e) => set(l.key, { quantity: e.target.value })} />
+                <input id={`${l.key}-qty`} className="input" inputMode="decimal" value={l.quantity} aria-invalid={qtyBad || undefined} onChange={(e) => set(l.key, { quantity: e.target.value })} />
               </div>
               <div>
                 <label htmlFor={`${l.key}-unit`} className="label">
@@ -70,8 +70,6 @@ export function LineEditor({ lines, onChange, services }: { lines: LineDraft[]; 
                 </label>
                 <input id={`${l.key}-unit`} className="input" maxLength={40} value={l.unit} onChange={(e) => set(l.key, { unit: e.target.value })} />
               </div>
-            </div>
-            <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_7rem_auto] sm:items-end">
               <div>
                 <label htmlFor={`${l.key}-price`} className="label">
                   {t("qtc.q.price")}
@@ -86,16 +84,19 @@ export function LineEditor({ lines, onChange, services }: { lines: LineDraft[]; 
                   aria-describedby={`${l.key}-price-note`}
                   onChange={(e) => set(l.key, { unit_price: e.target.value })}
                 />
-                <p id={`${l.key}-price-note`} className={cx("hint", needsPrice ? "text-warn" : priceBad ? "text-bad" : "")}>
-                  {priceBad
-                    ? t("qtc.priceList.invalidPrice")
-                    : l.unit_price.trim()
-                      ? t("qtc.q.source.manual")
-                      : listed
-                        ? t("qtc.q.fromList", { price: formatAmount(listed) })
-                        : t("qtc.q.needsPrice")}
-                </p>
               </div>
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_7rem_auto] sm:items-end">
+              {/* Where the price comes from (or that one is still needed), for the unit price above. */}
+              <p id={`${l.key}-price-note`} className={cx("hint sm:mb-2", needsPrice ? "text-warn" : priceBad ? "text-bad" : "")}>
+                {priceBad
+                  ? t("qtc.priceList.invalidPrice")
+                  : l.unit_price.trim()
+                    ? t("qtc.q.source.manual")
+                    : listed
+                      ? t("qtc.q.fromList", { price: formatAmount(listed) })
+                      : t("qtc.q.needsPrice")}
+              </p>
               <div>
                 <label htmlFor={`${l.key}-disc`} className="label">
                   {t("qtc.q.discount")}

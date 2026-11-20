@@ -85,6 +85,48 @@ describe("qtcPageFor: saying a page name opens that Sales & Finance page", () =>
     }
   });
 
+  it("opens the page when you say you want to make one", () => {
+    for (const text of ["ต้องการสร้างใบเสนอราคา", "อยากทำใบเสนอราคาค่ะ", "Want to do the Quotations", "I want to create a quotation", "new quotation"]) {
+      expect(qtcPageFor(text)?.path, text).toBe("/qtc/quotations/new"); // the new-quotation form
+    }
+    for (const text of ["ใบเสนอราคา", "เปิดหน้าใบเสนอราคา", "show me the quotes"]) {
+      expect(qtcPageFor(text)?.path, text).toBe("/qtc/quotations"); // the list
+    }
+    for (const text of ["ต้องการสร้างใบแจ้งหนี้", "ผมอยากทำใบแจ้งหนี้ใหม่", "Want to do the Invoice", "I'd like to make an invoice"]) {
+      expect(qtcPageFor(text)?.path, text).toBe("/qtc/invoices/new"); // the new-invoice form
+    }
+    expect(qtcPageFor("ใบแจ้งหนี้")?.path).toBe("/qtc/invoices"); // the list
+  });
+
+  it("opens Orders and Payments too", () => {
+    for (const text of ["ใบสั่งขาย", "เปิดหน้าใบสั่งขาย", "ขอดูออเดอร์ทั้งหมด", "Orders", "sales orders", "show me the orders"]) {
+      expect(qtcPageFor(text)?.path, text).toBe("/qtc/orders");
+    }
+    for (const text of ["การรับชำระ", "รับชำระ", "ไปที่หน้าการชำระเงิน", "Payments", "payment.", "open payments"]) {
+      expect(qtcPageFor(text)?.path, text).toBe("/qtc/payments");
+    }
+  });
+
+  it("covers every Sales & Finance page", () => {
+    const cases: [string, string][] = [
+      ["งานขายและการเงิน", "/qtc"],
+      ["Sales & Finance", "/qtc"],
+      ["ภาพรวมงานขาย", "/qtc"],
+      ["ลูกค้า", "/qtc/customers"],
+      ["เปิดหน้ารายชื่อลูกค้า", "/qtc/customers"],
+      ["Customers", "/qtc/customers"],
+      ["เพิ่มลูกค้า", "/qtc/customers?new=1"],
+      ["add a customer", "/qtc/customers?new=1"],
+      ["บริการและราคา", "/qtc/services"],
+      ["รายการราคา", "/qtc/services"],
+      ["price list", "/qtc/services"],
+      ["เพิ่มบริการใหม่", "/qtc/services?new=1"],
+      ["ใบเสนอราคา", "/qtc/quotations"], // "ราคา" inside it never opens Services
+    ];
+    for (const [text, path] of cases) expect(qtcPageFor(text)?.path, text).toBe(path);
+    expect(qtcPageFor("ภาพรวม")).toBeNull(); // that is the app's main dashboard
+  });
+
   it("leaves sentences to Mira's other flows", () => {
     for (const text of [
       "สร้างใบเสนอราคางาน Production ให้ลูกค้า ABC", // a draft quotation (Sales & Finance agent)
@@ -93,6 +135,11 @@ describe("qtcPageFor: saying a page name opens that Sales & Finance page", () =>
       "เตรียมข้อความติดตามเงินสำหรับ Invoice ที่เกินกำหนด",
       "Create a quotation for customer ABC",
       "ทำโปสเตอร์โปรโมชันร้านกาแฟ",
+      "Prepare payment reminders for overdue invoices",
+      "ลูกค้ารายไหนยังไม่ชำระเงิน",
+      "สร้างใบสั่งขายจากใบเสนอราคา QT-2026-0001",
+      "ลูกค้ารายไหนยังไม่จ่ายเงิน",
+      "ราคาของบริการถ่ายโดรนเท่าไหร่",
     ]) {
       expect(qtcPageFor(text), text).toBeNull();
     }

@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { Field, QtcError, QtcShell } from "@/components/qtc/QtcShell";
 import { Badge, Button, Card, EmptyState, LoadingBlock, Switch, cx } from "@/components/ui";
@@ -12,7 +13,15 @@ export default function ServicesPage() {
   const { t } = useI18n();
   const services = useApi<Page<Service>>("qtc:services", (signal) => api<Page<Service>>("/v1/qtc/services", { query: { limit: 200 }, signal }));
   const lists = useApi<Page<PriceList>>("qtc:price-lists", (signal) => api<Page<PriceList>>("/v1/qtc/price-lists", { query: { limit: 50 }, signal }));
-  const [creating, setCreating] = useState(false);
+  // `?new=1` (e.g. from a voice command) opens the form; closing it clears the parameter.
+  const router = useRouter();
+  const params = useSearchParams();
+  const [openedHere, setCreatingState] = useState(false);
+  const creating = openedHere || params.get("new") === "1";
+  const setCreating = (open: boolean) => {
+    setCreatingState(open);
+    if (!open && params.get("new")) router.replace("/qtc/services");
+  };
   const reloadAll = () => {
     services.reload();
     lists.reload();
