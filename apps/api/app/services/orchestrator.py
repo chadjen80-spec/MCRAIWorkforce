@@ -539,9 +539,15 @@ def refresh_caption_claims(session: Session, art: Artifact) -> None:
     task.result = {**(task.result or {}), "claim_flags": flags}
 
 
-def edit_artifact_text(session: Session, art: Artifact, text: str, actor: str) -> Artifact:
+CAPTION_VERSIONS_KEPT = 20
+
+
+def edit_artifact_text(session: Session, art: Artifact, text: str, actor: str, source: str = "edit") -> Artifact:
     """Replace the content of a text deliverable. The new file gets a fresh checksum so QA
-    integrity checks keep passing; the edit is recorded in the job's timeline."""
+    integrity checks keep passing; the edit is recorded in the job's timeline.
+
+    Captions keep a version history in their metadata (the last 20 earlier texts, with when, who and how each
+    version was made), so a regenerated or edited caption can be restored."""
     if art.content_type.split(";")[0].strip() not in EDITABLE_TEXT_TYPES:
         raise conflict("Only plain-text deliverables (captions, copy, storyboards, subtitles) can be edited")
     job = session.get(Job, art.job_id)
@@ -549,12 +555,23 @@ def edit_artifact_text(session: Session, art: Artifact, text: str, actor: str) -
         raise conflict("The job is still running. Edit its files after it has finished.")
     text = text.replace("\r\n", "\n")
     data = text.encode("utf-8")
+    meta = dict(art.meta or {})
+    if art.kind == "caption":
+        try:
+            previous = get_storage().read_bytes(art.storage_key).decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001 - a missing old file must not block the edit
+            previous = art.text_preview or ""
+        if previous.strip() and previous != text:
+            entry = {"text": previous, "at": meta.get("edited_at") or art.created_at.isoformat(),
+                     "by": meta.get("edited_by") or "agent:content", "source": meta.get("source") or "original"}
+            meta["versions"] = [*(meta.get("versions") or []), entry][-CAPTION_VERSIONS_KEPT:]
+        meta["source"] = source
     get_storage().put_bytes(art.storage_key, data, art.content_type)
     old_size = art.size_bytes
     art.size_bytes = len(data)
     art.sha256 = hashlib.sha256(data).hexdigest()
     art.text_preview = text[:4000]
-    art.meta = {**(art.meta or {}), "edited": True, "edited_at": utcnow().isoformat(), "edited_by": actor}
+    art.meta = {**meta, "edited": True, "edited_at": utcnow().isoformat(), "edited_by": actor}
     if art.kind == "caption":
         refresh_caption_claims(session, art)
     task_key = session.scalar(select(Task.key).where(Task.id == art.task_id))

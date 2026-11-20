@@ -31,7 +31,7 @@ os.environ.update({
 })
 # Tests must never reach real providers. An empty environment value overrides whatever the
 # developer's local .env file configures (a real OpenAI key, a running ComfyUI, Redis).
-for var in ("OPENAI_API_KEY", "COMFYUI_URL", "REDIS_URL"):
+for var in ("OPENAI_API_KEY", "OPENAI_CONTENT_MODEL", "COMFYUI_URL", "REDIS_URL"):
     os.environ[var] = ""
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -134,6 +134,18 @@ def mp3_bytes() -> bytes:
     return out.read_bytes()
 
 
+# Six captions in different creative angles, written the way a person would (used by the fake model).
+ANGLE_NAMES = ["conversational", "storytelling", "problem_solution", "educational", "direct_promotional", "community_engagement"]
+SAMPLE_CAPTIONS = [
+    "ร้านเล็กก็มีทีมคอนเทนต์ได้นะ MCR SME Copilot ช่วยคิดแคปชัน ทำภาพ และร่างเอกสารให้จากคำสั่งเดียว คุณมีเวลาไปดูแลลูกค้ามากขึ้น",
+    "เมื่อคืนพี่เจ้าของร้านขนมนั่งคิดโพสต์จนตีสอง วันนี้เธอพิมพ์สั่งงานแค่ประโยคเดียว แล้วไปนอนเร็วกว่าเดิมเยอะเลย",
+    "โพสต์ไม่ทันเพราะงานหน้าร้านล้นมือใช่ไหม ให้ผู้ช่วย AI ร่างให้ก่อน แล้วคุณค่อยตรวจและกดอนุมัติเอง ไม่ต้องเริ่มจากหน้าว่าง",
+    "เคล็ดลับเล็ก ๆ ก่อนโพสต์: บอกให้ชัดว่าลูกค้าจะได้อะไร ไม่ต้องยาว ลองสั่งให้ผู้ช่วยเขียนสามแบบแล้วเลือกแบบที่ใช่ที่สุด",
+    "อยากลองใช้ผู้ช่วยสร้างคอนเทนต์สำหรับธุรกิจไทย ทักแชทมาได้เลย ทีมงานพาดูการใช้งานจริงให้ค่ะ",
+    "ถามเพื่อน ๆ เจ้าของร้านหน่อย ทุกวันนี้ใช้เวลาเขียนโพสต์กันวันละกี่นาที มาแชร์กันในคอมเมนต์ได้นะคะ",
+]
+
+
 def llm_reply(system: str, user: str) -> dict:
     if "Planner Agent" in system:
         # behave like a competent model: extract exactly what the command asks for
@@ -146,14 +158,20 @@ def llm_reply(system: str, user: str) -> dict:
         if spec["video"] and spec["video"]["duration_seconds"] == 60:
             spec["video"]["duration_seconds"] = 20  # keep the test render short
         return spec
-    if "Content Agent" in system and "Rewrite one caption" in user:
-        return {"caption": {"text": "แคปชันใหม่: ให้ทีมเอเจนต์ AI ช่วยสร้างคอนเทนต์ครบในคำสั่งเดียว รับประกันยอดขาย 100%",
-                            "hashtags": ["#MCRSMECopilot"], "call_to_action": "สอบถามข้อมูลเพิ่มเติม"}}
+    if "Content Agent" in system and "Task: rewrite one caption" in user:
+        return {"captions": [{"text": "เช้าวันจันทร์ที่งานโพสต์ทั้งสัปดาห์เสร็จก่อนกาแฟแก้วแรก ฟังดูดีใช่ไหมคะ "
+                                      "MCR SME Copilot ช่วยร่างให้ คุณแค่เลือกและปรับนิดหน่อย ลองทักมาคุยกันได้ค่ะ",
+                              "tone": "friendly", "platform": "facebook", "creative_angle": "storytelling",
+                              "hashtags": ["#MCRSMECopilot"]}]}
+    if "Content Agent" in system and "caption(s) completely" in user:
+        n = int(re.search(r"Rewrite (\d+) caption", user)[1])
+        return {"captions": [{"text": f"ฉบับแก้ใหม่ {i}: {SAMPLE_CAPTIONS[-1 - i]}", "tone": "friendly", "platform": "facebook",
+                              "creative_angle": "conversational"} for i in range(n)]}
     if "Content Agent" in system:
         n = int(re.search(r"Write exactly (\d+) captions", user)[1])
-        return {"captions": [{"text": f"แคปชันที่ {i} ให้ธุรกิจของคุณทำงานง่ายขึ้นด้วย MCR SME Copilot ผู้ช่วย AI สำหรับ SME ไทย",
-                              "hashtags": ["#MCRSMECopilot", "#SMEไทย"], "call_to_action": "ทักแชทเพื่อเริ่มต้นวันนี้"}
-                             for i in range(1, n + 1)],
+        return {"captions": [{"text": SAMPLE_CAPTIONS[i % len(SAMPLE_CAPTIONS)], "tone": "friendly", "platform": "facebook",
+                              "creative_angle": ANGLE_NAMES[i % len(ANGLE_NAMES)], "hashtags": ["#MCRSMECopilot", "#SMEไทย"]}
+                             for i in range(n)],
                 "brief": {"headline": "สั่งครั้งเดียว งานครบ", "tagline": "ผู้ช่วย AI สำหรับ SME ไทย",
                           "key_messages": ["ประหยัดเวลา", "ใช้งานง่าย", "ทำงานต่อเนื่องแม้ปิดเบราว์เซอร์"]},
                 "youtube_title": "MCR SME Copilot", "youtube_description": "ผู้ช่วย AI สำหรับธุรกิจ SME"}
@@ -197,6 +215,7 @@ class FakeOpenAI:
         self.calls: list[str] = []
         self.fail_next: dict[str, int] = {}  # path suffix -> number of 500s to return first
         self.mutate = None  # optional hook(system, reply) -> reply
+        self.requests: list[dict] = []  # chat request bodies, for prompt assertions
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -208,7 +227,11 @@ class FakeOpenAI:
                 return httpx.Response(500, text="upstream exploded")
         if path.endswith("/chat/completions"):
             body = json.loads(request.content)
-            system, user = body["messages"][0]["content"], body["messages"][1]["content"]
+            msgs = body["messages"]
+            # system + developer layers form the instructions; the last user message is the request
+            system = "\n\n".join(m["content"] for m in msgs if m["role"] in ("system", "developer"))
+            user = [m["content"] for m in msgs if m["role"] == "user"][-1]
+            self.requests.append(body)
             reply = llm_reply(system, user)
             if self.mutate:
                 reply = self.mutate(system, reply)

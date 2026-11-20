@@ -223,19 +223,26 @@ def regenerate_caption(artifact_id: uuid.UUID, body: schemas.CaptionRegenerate,
     project = session.get(Project, job.project_id)
     assert project is not None
     ctx = AgentContext(session=session, job=job, task=task, org=org, project=project)
+    if body.action == "tone" and not (body.tone or "").strip():
+        raise AppError(422, "VALIDATION_ERROR", "Choose a tone for 'Change tone'")
     try:
-        text, warnings, demo = rewrite_caption(ctx, current, others, (body.instruction or "").strip() or None)
+        # Nothing is saved until the model has written a new version that passes the checks; on any error the
+        # current caption stays exactly as it is.
+        text, warnings, demo, meta = rewrite_caption(ctx, current, others, (body.instruction or "").strip() or None,
+                                                     action=body.action, tone=(body.tone or "").strip() or None,
+                                                     current_is_demo=art.is_demo)
     except AgentError as exc:
         status = {"PROVIDER_NOT_CONFIGURED": 409, "PRIVACY_POLICY_BLOCKED": 409, "BUDGET_EXCEEDED": 402,
-                  "MONTHLY_BUDGET_EXCEEDED": 402, "PROVIDER_NO_CREDIT": 402}.get(exc.code, 502)
+                  "MONTHLY_BUDGET_EXCEEDED": 402, "PROVIDER_NO_CREDIT": 402, "CAPTION_QUALITY_FAILED": 422}.get(exc.code, 502)
         raise AppError(status, exc.code, exc.message) from exc
     finally:
         ctx.cleanup()
-    art = orchestrator.edit_artifact_text(session, art, text, principal.actor)
+    art = orchestrator.edit_artifact_text(session, art, text, principal.actor, source=body.action)
     art.is_demo = demo
-    art.meta = {**(art.meta or {}), "regenerated": True}
+    art.meta = {**(art.meta or {}), "regenerated": True, **{k: v for k, v in meta.items() if k != "attempts"}, "quality": warnings}
     orchestrator.audit(session, art.organization_id, "artifact.regenerated", principal.actor, job_id=job.id, task_key=task.key,
-                       detail={"file": art.filename, "instruction": bool(body.instruction), "warnings": len(warnings)})
+                       detail={"file": art.filename, "action": body.action, "instruction": bool(body.instruction),
+                               "warnings": len(warnings), "attempts": meta.get("attempts", 1)})
     session.commit()
     rerun_qa_task.apply_async(args=[str(job.id), principal.actor], queue="qa")
     return schemas.CaptionRegenerateResult(artifact=_artifacts_out(session, [art], principal)[0], warnings=warnings)

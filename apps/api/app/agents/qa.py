@@ -60,7 +60,7 @@ def _verify_stored(ctx: AgentContext, art: Artifact, c: Checker, task_key: str) 
     return data
 
 
-def _check_content(task: Task, arts: list[Artifact], blobs: dict, c: Checker) -> None:
+def _check_content(task: Task, arts: list[Artifact], blobs: dict, c: Checker, business_context: str = "") -> None:
     wanted = int(task.params.get("caption_count", 0))
     captions = [a for a in arts if a.kind == "caption"]
     ok = len(captions) == wanted
@@ -77,6 +77,25 @@ def _check_content(task: Task, arts: list[Artifact], blobs: dict, c: Checker) ->
                   f"captions {wrong} are not Thai" if wrong else "captions are in Thai", task.key, True)
         if len(set(texts)) < len(texts):
             c.add("content:duplicates", "warn", "some captions are identical", task.key)
+        # Natural-writing checks (clichés, similarity between captions, repetition, unsupported claims, emoji and
+        # hashtag overuse). They need a person's judgement, so they are warnings, never automatic rework loops.
+        if not any(a.is_demo for a in captions):
+            from app.agents.captions import CreativeBrief, issues_for
+
+            saved = (task.result or {}).get("creative_brief")
+            try:
+                brief = CreativeBrief.model_validate(saved) if saved else None
+            except ValueError:
+                brief = None
+            if brief is not None:
+                found = issues_for(texts, brief, business_context)
+                for i, issues in enumerate(found, 1):
+                    for x in issues:
+                        if x["code"] in ("language", "unsupported_claim"):
+                            continue  # reported by the checks above / the claim flags
+                        c.add(f"content:{x['code']}", "warn", f"caption {i}: {x['detail']}", task.key)
+                if not any(found):
+                    c.add("content:natural_writing", "pass", "no clichés, repetition or near-duplicate captions found", task.key)
     for flag in (task.result or {}).get("claim_flags", []):
         c.add("content:unsupported_claim", "warn", flag, task.key)
 
@@ -230,7 +249,7 @@ def run(ctx: AgentContext) -> dict[str, Any]:
         if intact:
             c.add(f"task:{task.key}", "pass", f"{len(arts)} file(s) stored and checksums verified", task.key)
         if task.agent == "content":
-            _check_content(task, arts, blobs, c)
+            _check_content(task, arts, blobs, c, ctx.business_context)
             caption_texts += [blobs[a.id].decode("utf-8", "replace") for a in arts if a.kind == "caption" and a.id in blobs and not a.is_demo]
         elif task.agent == "image":
             _check_image(task, arts, blobs, c)

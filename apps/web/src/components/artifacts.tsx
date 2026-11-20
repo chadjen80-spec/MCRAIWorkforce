@@ -7,6 +7,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { api, fileUrl, toApiError } from "@/lib/api";
 import { saveHandoff } from "@/lib/poster";
 import type { Artifact, ItemList, Job, PosterSpec } from "@/lib/types";
+import { CaptionTools } from "./CaptionTools";
 import { Badge, Button, DemoBadge, buttonClass, cx } from "./ui";
 
 function CopyButton({ text }: { text: string }) {
@@ -247,36 +248,19 @@ export function ArtifactCard({
       ? { title: "docRegen.title", label: "docRegen.label", placeholder: "docRegen.placeholder", note: "docRegen.note", button: "docRegen.button" } as const
       : { title: "regen.title", label: "regen.sceneLabel", placeholder: "regen.scenePlaceholder", note: "regen.replaceNote", button: "regen.button" } as const;
 
-  // Captions: the server writes a new version straight away (a few seconds), so no polling is needed.
+  // Captions: every action is a full AI rewrite, written in a few seconds (no polling). The response carries the
+  // updated caption with its version history; QA re-checks the job in the background.
   const canRewrite = artifact.kind === "caption";
-  const [rewrite, setRewrite] = useState<"idle" | "form" | "working">("idle");
-  const [instruction, setInstruction] = useState("");
-  const [rewriteError, setRewriteError] = useState<string | null>(null);
-  const [rewriteWarnings, setRewriteWarnings] = useState<string[]>([]);
+  const [captionArtifact, setCaptionArtifact] = useState<Artifact | null>(null);
   const latestOnChanged = useRef(onChanged);
   useEffect(() => {
     latestOnChanged.current = onChanged;
   });
-  const startRewrite = async () => {
-    setRewrite("working");
-    setRewriteError(null);
-    setRewriteWarnings([]);
-    try {
-      const res = await api<{ artifact: Artifact; warnings: string[] }>(`/v1/artifacts/${artifact.id}/regenerate-caption`, {
-        method: "POST",
-        body: { instruction: instruction.trim() || null },
-      });
-      setSavedText(res.artifact.text_preview ?? "");
-      setRewriteWarnings(res.warnings);
-      setInstruction("");
-      setRewrite("idle");
-      onChanged?.();
-      // QA re-checks the job in the background; refresh again once it has had time to finish.
-      setTimeout(() => latestOnChanged.current?.(), 10000);
-    } catch (e) {
-      setRewriteError(t("capRegen.failed", { message: toApiError(e).message }));
-      setRewrite("idle");
-    }
+  const captionUpdated = (updated: Artifact) => {
+    setCaptionArtifact(updated);
+    setSavedText(updated.text_preview ?? "");
+    onChanged?.();
+    setTimeout(() => latestOnChanged.current?.(), 10000);
   };
 
   const startEdit = async () => {
@@ -367,13 +351,6 @@ export function ArtifactCard({
         {t("docRegen.working")}
       </div>
     );
-  } else if (rewrite === "working") {
-    preview = (
-      <div role="status" className="flex min-h-32 flex-col items-center justify-center gap-2 rounded-lg border border-line bg-bg p-3 text-sm text-ink">
-        <span aria-hidden="true" className="size-6 animate-spin rounded-full border-2 border-cyan border-t-transparent" />
-        {t("capRegen.working")}
-      </div>
-    );
   } else if (draft !== null) {
     preview = (
       <div>
@@ -460,47 +437,7 @@ export function ArtifactCard({
           </div>
         </div>
       )}
-      {canRewrite && rewrite === "form" && (
-        <div className="space-y-2 rounded-lg border border-line bg-bg p-3">
-          <p className="text-sm font-medium text-ink">{t("capRegen.title")}</p>
-          <label htmlFor={`rewrite-${artifact.id}`} className="label">
-            {t("capRegen.label")}
-          </label>
-          <textarea
-            id={`rewrite-${artifact.id}`}
-            value={instruction}
-            onChange={(e) => setInstruction(e.target.value)}
-            maxLength={500}
-            rows={2}
-            placeholder={t("capRegen.placeholder")}
-            className="input resize-y"
-          />
-          <p className="text-xs text-warn">{t("capRegen.note")}</p>
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="primary" onClick={startRewrite}>
-              {t("capRegen.start")}
-            </Button>
-            <Button size="sm" onClick={() => setRewrite("idle")}>
-              {t("common.cancel")}
-            </Button>
-          </div>
-        </div>
-      )}
-      {rewriteError && (
-        <p role="alert" className="text-xs text-bad">
-          {rewriteError}
-        </p>
-      )}
-      {rewriteWarnings.length > 0 && (
-        <div role="status" className="rounded-lg border border-warn/50 bg-warn/10 p-2 text-xs text-ink">
-          <p className="font-medium text-warn">{t("capRegen.warnings")}</p>
-          <ul className="ml-4 list-disc">
-            {rewriteWarnings.map((w) => (
-              <li key={w}>{w}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {canRewrite && draft === null && <CaptionTools artifact={captionArtifact ?? artifact} onUpdated={captionUpdated} />}
       {regen.state.phase === "error" && (
         <p role="alert" className="text-xs text-bad">
           {regen.state.message}
@@ -539,11 +476,6 @@ export function ArtifactCard({
         {canEditPoster && (
           <Button size="sm" loading={openingPoster} onClick={() => void editPoster()} title={t("posterEdit.hint")}>
             {t("posterEdit.button")}
-          </Button>
-        )}
-        {canRewrite && rewrite === "idle" && (
-          <Button size="sm" onClick={() => setRewrite("form")}>
-            {t("capRegen.button")}
           </Button>
         )}
         {canEdit && (

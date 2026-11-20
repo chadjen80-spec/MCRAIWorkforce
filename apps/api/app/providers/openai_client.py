@@ -24,17 +24,19 @@ T = TypeVar("T", bound=BaseModel)
 class LLMUsage:
     input_tokens: int = 0
     output_tokens: int = 0
+    model: str = ""
 
     @property
     def cost_usd(self) -> Decimal:
         s = get_settings()
-        return (
-            Decimal(self.input_tokens) * s.llm_input_usd_per_1m + Decimal(self.output_tokens) * s.llm_output_usd_per_1m
-        ) / Decimal(1_000_000)
+        prices = s.llm_model_prices.get(self.model)
+        p_in, p_out = (Decimal(prices[0]), Decimal(prices[1])) if prices else (s.llm_input_usd_per_1m, s.llm_output_usd_per_1m)
+        return (Decimal(self.input_tokens) * p_in + Decimal(self.output_tokens) * p_out) / Decimal(1_000_000)
 
     def add(self, other: LLMUsage) -> None:
         self.input_tokens += other.input_tokens
         self.output_tokens += other.output_tokens
+        self.model = other.model or self.model
 
 
 def _raise_for(resp: httpx.Response, what: str) -> None:
@@ -70,24 +72,49 @@ class OpenAIClient:
         return resp
 
     # -- chat -----------------------------------------------------------------
-    def complete_json(self, system: str, user: str, schema: type[T], *, temperature: float = 0.6) -> tuple[T, LLMUsage]:
-        """Ask for a JSON object and validate it against `schema`. One repair round on invalid output."""
-        usage = LLMUsage()
-        messages = [
-            {
-                "role": "system",
-                "content": system
-                + "\n\nRespond with a single JSON object that conforms to this JSON Schema. No prose.\n"
-                + json.dumps(schema.model_json_schema(), ensure_ascii=False),
-            },
-            {"role": "user", "content": user},
-        ]
+    def complete_json(
+        self,
+        system: str,
+        user: str,
+        schema: type[T],
+        *,
+        temperature: float = 0.6,
+        developer: str | None = None,
+        model: str | None = None,
+    ) -> tuple[T, LLMUsage]:
+        """Ask for a JSON object and validate it against `schema`. One repair round on invalid output.
+
+        Prompt layers: `system` (who the model is), optional `developer` (rules, constraints, output format) and
+        `user` (the actual request). The developer layer is sent with the `developer` role; if a provider rejects
+        that role (some OpenAI-compatible endpoints do), the call is repeated once with it merged into `system`.
+        """
+        schema_note = (
+            "\n\nRespond with a single JSON object that conforms to this JSON Schema. No prose.\n"
+            + json.dumps(schema.model_json_schema(), ensure_ascii=False)
+        )
+        if developer and self.cfg.developer_role and OpenAIClient._developer_role_ok:
+            head = [{"role": "system", "content": system}, {"role": "developer", "content": developer + schema_note}]
+        else:
+            head = [{"role": "system", "content": system + ("\n\n" + developer if developer else "") + schema_note}]
+        try:
+            return self._complete(head + [{"role": "user", "content": user}], schema, temperature, model)
+        except AgentError as exc:
+            if developer and len(head) == 2 and exc.code == "PROVIDER_REQUEST_REJECTED" and "developer" in exc.message.lower():
+                OpenAIClient._developer_role_ok = False  # remember for this process
+                merged = [{"role": "system", "content": system + "\n\n" + developer + schema_note}]
+                return self._complete(merged + [{"role": "user", "content": user}], schema, temperature, model)
+            raise
+
+    _developer_role_ok = True
+
+    def _complete(self, messages: list[dict], schema: type[T], temperature: float, model: str | None) -> tuple[T, LLMUsage]:
+        usage = LLMUsage(model=model or self.cfg.model)
         last_error = ""
         for _ in range(2):
             resp = self._post(
                 "/chat/completions",
                 {
-                    "model": self.cfg.model,
+                    "model": model or self.cfg.model,
                     "messages": messages,
                     "response_format": {"type": "json_object"},
                     "temperature": temperature,
@@ -102,10 +129,8 @@ class OpenAIClient:
                 return schema.model_validate_json(content), usage
             except (KeyError, IndexError, ValidationError, ValueError) as exc:
                 last_error = str(exc)[:1500]
-                messages.append({"role": "assistant", "content": str(data.get("choices", ""))[:3000]})
-                messages.append(
-                    {"role": "user", "content": f"That output was invalid: {last_error}\nReturn corrected JSON only."}
-                )
+                messages = [*messages, {"role": "assistant", "content": str(data.get("choices", ""))[:3000]},
+                            {"role": "user", "content": f"That output was invalid: {last_error}\nReturn corrected JSON only."}]
         raise AgentError("LLM_INVALID_OUTPUT", f"Model did not return valid structured output: {last_error}", retryable=True)
 
     # -- images -----------------------------------------------------------------

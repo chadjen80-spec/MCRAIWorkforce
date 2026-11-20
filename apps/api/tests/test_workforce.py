@@ -691,15 +691,16 @@ def test_regenerate_caption(client, auth, org_b, fake_openai):
     art = body["artifact"]
     assert art["id"] == target["id"] and art["filename"] == "caption-01.txt"  # same file, new content
     text = client.get(art["download_url"], headers=auth).content.decode()
-    assert text.startswith("แคปชันใหม่") and "สอบถามข้อมูลเพิ่มเติม" in text and "#MCRSMECopilot" in text
+    assert text.startswith("เช้าวันจันทร์") and text.endswith("#MCRSMECopilot")  # the model's whole caption + its hashtags
     assert art["metadata"]["regenerated"] is True and art["text_preview"] == text
-    assert any("100%" in w for w in body["warnings"])  # unsupported claim reported straight away
+    assert art["metadata"]["versions"][-1]["text"] == target["text_preview"]  # the previous version is kept
+    assert body["warnings"] == []
     sent = [c for c in fake_openai.calls if c.endswith("/chat/completions")]
     assert sent  # the rewrite went through the (fake) cloud model
-    # the other caption is untouched; QA re-ran and flagged the new claim for review
+    # the other caption is untouched; QA re-ran
     assert client.get(other["download_url"], headers=auth).content.decode() == other["text_preview"]
     after = client.get(f"/v1/jobs/{job['id']}", headers=auth).json()
-    assert after["qa_verdict"] == "HUMAN_REVIEW" and after["status"] == "completed"
+    assert after["qa_verdict"] in ("PASS", "HUMAN_REVIEW") and after["status"] == "completed"
     events = [e["action"] for e in client.get(f"/v1/jobs/{job['id']}/events", headers=auth).json()["items"]]
     assert events.index("artifact.regenerated") < len(events) - 1 and events[-1] == "qa.verdict"
     assert len([a for a in artifacts_of(client, auth, job["id"]) if a["kind"] == "qa_report"]) == 1

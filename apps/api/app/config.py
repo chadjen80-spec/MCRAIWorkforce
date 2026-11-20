@@ -75,6 +75,12 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4o-mini"
+    # Captions can use their own model (e.g. a stronger one for Thai copy); empty uses OPENAI_MODEL.
+    openai_content_model: str = ""
+    # Send rules as a "developer" message (OpenAI); falls back to the system message if a provider rejects it.
+    openai_developer_role: bool = True
+    # Full rewrites allowed when a caption fails the quality checks (per generation or regeneration).
+    caption_max_rewrites: int = 1
     openai_image_model: str = "gpt-image-2"  # gpt-image-1 was retired; Settings → openai shows the one in use
     openai_tts_model: str = "gpt-4o-mini-tts"
     openai_tts_voice: str = "alloy"
@@ -86,6 +92,17 @@ class Settings(BaseSettings):
     # current price list; these are configuration, not facts.
     llm_input_usd_per_1m: Decimal = Decimal("0.15")
     llm_output_usd_per_1m: Decimal = Decimal("0.60")
+    # Per-model prices (USD per 1M tokens: [input, output]) for models other than the default above, e.g. the
+    # caption model. A model not listed here is costed with the default prices. JSON in the environment:
+    # LLM_MODEL_PRICES='{"gpt-4.1": [2.0, 8.0]}'
+    llm_model_prices: dict[str, list[Decimal]] = Field(
+        default_factory=lambda: {
+            "gpt-4o-mini": [Decimal("0.15"), Decimal("0.60")],
+            "gpt-4.1-mini": [Decimal("0.40"), Decimal("1.60")],
+            "gpt-4.1": [Decimal("2.00"), Decimal("8.00")],
+            "gpt-4o": [Decimal("2.50"), Decimal("10.00")],
+        }
+    )
     image_usd_per_image: Decimal = Decimal("0.07")
     tts_usd_per_1k_chars: Decimal = Decimal("0.015")
     llm_estimated_usd_per_call: Decimal = Decimal("0.01")

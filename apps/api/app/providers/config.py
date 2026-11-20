@@ -21,6 +21,8 @@ class OpenAIConfig:
     tts_model: str
     tts_voice: str
     image_priority: str = "fallback"  # images: "first" (before ComfyUI) | "fallback" (after ComfyUI)
+    content_model: str = ""  # captions; empty: `model`
+    developer_role: bool = True  # send the developer prompt layer with the "developer" role
 
 
 FIREFLY_MODELS = ("image3", "image4_standard", "image4_ultra")
@@ -66,6 +68,8 @@ def resolve_openai(session: Session, org_id: uuid.UUID) -> OpenAIConfig | None:
         tts_model=cfg.get("tts_model") or s.openai_tts_model,
         tts_voice=cfg.get("tts_voice") or s.openai_tts_voice,
         image_priority=cfg.get("image_priority") or "fallback",
+        content_model=cfg.get("content_model") or s.openai_content_model,
+        developer_role=s.openai_developer_role,
     )
 
 

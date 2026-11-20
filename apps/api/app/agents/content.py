@@ -7,16 +7,14 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.agents import prompts
+from app.agents import captions as cw
 from app.agents.base import AgentContext, has_thai
+from app.agents.captions import CaptionDraft
 from app.errors import AgentError
 from app.services.router import route_llm
 
-
-class Caption(BaseModel):
-    text: str = Field(min_length=10)
-    hashtags: list[str] = Field(default_factory=list)
-    call_to_action: str = ""
+# A caption is written whole by the model (see app.agents.captions); this name is kept for existing imports.
+Caption = CaptionDraft
 
 
 class CampaignBrief(BaseModel):
@@ -26,7 +24,7 @@ class CampaignBrief(BaseModel):
 
 
 class ContentOutput(BaseModel):
-    captions: list[Caption] = Field(default_factory=list)
+    captions: list[CaptionDraft] = Field(default_factory=list)
     brief: CampaignBrief
     youtube_title: str | None = None
     youtube_description: str | None = None
@@ -49,20 +47,20 @@ def _demo_output(ctx: AgentContext, count: int, language: str, youtube: bool) ->
     product = ctx.brand["product"]
     if language == "th":
         captions = [
-            Caption(
+            CaptionDraft(
                 text=f"[DEMO] ตัวอย่างแคปชันที่ {i} สำหรับ {product} — ข้อความนี้มาจากโหมดสาธิต ยังไม่ได้สร้างโดย AI "
                      f"กรุณาตั้งค่าผู้ให้บริการ AI เพื่อสร้างเนื้อหาจริง",
-                hashtags=["#DEMO"], call_to_action="[DEMO]",
+                hashtags=["#DEMO"], creative_angle="demo",
             ) for i in range(1, count + 1)
         ]
         brief = CampaignBrief(headline=f"[DEMO] {product}", tagline="[DEMO] ข้อความตัวอย่างจากโหมดสาธิต",
                               key_messages=["[DEMO] ประเด็นหลักจะถูกสร้างเมื่อเชื่อมต่อผู้ให้บริการ AI"])
     else:
         captions = [
-            Caption(
+            CaptionDraft(
                 text=f"[DEMO] Sample caption {i} for {product} — produced by demo mode, not AI-generated. "
                      f"Configure an AI provider to generate real content.",
-                hashtags=["#DEMO"], call_to_action="[DEMO]",
+                hashtags=["#DEMO"], creative_angle="demo",
             ) for i in range(1, count + 1)
         ]
         brief = CampaignBrief(headline=f"[DEMO] {product}", tagline="[DEMO] Placeholder tagline from demo mode",
@@ -80,25 +78,22 @@ def run(ctx: AgentContext) -> dict[str, Any]:
     cap_lang = p.get("caption_language", "th")
     youtube = bool(p.get("youtube_metadata"))
 
+    brief = cw.build_brief(ctx)
+    quality: list[list[dict[str, str]]] = [[] for _ in range(count)]
     route = ctx.use_route(route_llm(ctx.session, ctx.job, ctx.org))  # type: ignore[arg-type]
     if route.demo or route.openai is None:
         out = _demo_output(ctx, count, cap_lang, youtube)
     else:
         user = (
-            f"{prompts.context_block(ctx.business_context, ctx.brand)}\n\n"
-            f"Campaign command from the business owner:\n\"\"\"\n{ctx.job.command}\n\"\"\"\n\n"
-            f"Write exactly {count} captions for {p.get('platform', 'facebook')} in "
-            f"{'Thai' if cap_lang == 'th' else 'English'}.\n"
-            f"Campaign brief language: {'Thai' if p.get('language') == 'th' else 'English'}.\n"
+            f"{brief.render()}\n\n"
+            + (cw.deliverables(count, brief) + "\n" if count else "Write no captions (captions: []).\n")
+            + "Also write the campaign brief (`brief`: headline, tagline, 3-5 key messages) that the document and video "
+            f"agents reuse, in {'Thai' if p.get('language') == 'th' else 'English'}.\n"
             + ("Also write youtube_title (max 70 chars) and youtube_description (max 800 chars).\n" if youtube
                else "Set youtube_title and youtube_description to null.\n")
+            + (f"Note from the QA review of the previous attempt: {p['instruction']}\n" if p.get("instruction") else "")
         )
-        out, usage = route.openai.complete_json(prompts.CONTENT, user, ContentOutput)
-        ctx.record_usage("openai", "chat", {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens},
-                         usage.cost_usd)
-        if len(out.captions) != count:
-            raise AgentError("CONTENT_COUNT_MISMATCH",
-                             f"Requested {count} captions but the model returned {len(out.captions)}", retryable=True)
+        out, quality = cw.generate(ctx, route.openai, user, ContentOutput, count, brief)
         if cap_lang == "th" and count and not all(has_thai(c.text) for c in out.captions):
             raise AgentError("CONTENT_WRONG_LANGUAGE", "Captions were requested in Thai but are not Thai", retryable=True)
 
@@ -112,7 +107,9 @@ def run(ctx: AgentContext) -> dict[str, Any]:
     for i, cap in enumerate(out.captions, 1):
         text = format_caption(cap)
         ctx.save_artifact("caption", f"caption-{i:02d}.txt", "text/plain; charset=utf-8", is_demo=demo,
-                          metadata={**meta, "index": i, "platform": p.get("platform", "facebook")},
+                          metadata={**meta, "index": i, "platform": cap.platform or p.get("platform", "facebook"),
+                                    "tone": cap.tone, "creative_angle": cap.creative_angle,
+                                    "quality": [] if demo else quality[i - 1]},
                           data=text.encode("utf-8"), text_preview=text)
     if youtube and out.youtube_title:
         yt = f"{out.youtube_title}\n\n{out.youtube_description or ''}".strip()
@@ -124,52 +121,35 @@ def run(ctx: AgentContext) -> dict[str, Any]:
         "caption_count": len(out.captions),
         "caption_language": cap_lang,
         "claim_flags": [] if demo else find_unsupported_claims([c.text for c in out.captions], ctx.business_context),
+        "quality_flags": [] if demo else [f"caption {i}: {x['detail']}" for i, q in enumerate(quality, 1) for x in q],
+        "creative_brief": brief.model_dump(),
     }
 
 
-def format_caption(cap: Caption) -> str:
-    """Caption text, then its call to action, then hashtags: the layout of the stored caption files."""
-    text = cap.text.strip()
-    if cap.call_to_action and cap.call_to_action not in text:
-        text += "\n\n" + cap.call_to_action
-    if cap.hashtags:
-        text += "\n\n" + " ".join(h if h.startswith("#") else f"#{h}" for h in cap.hashtags)
-    return text
+format_caption = cw.format_caption
 
 
-class CaptionRewrite(BaseModel):
-    caption: Caption
+def rewrite_caption(
+    ctx: AgentContext, current: str, others: list[str], instruction: str | None, *, action: str = "regenerate",
+    tone: str | None = None, current_is_demo: bool = False,
+) -> tuple[str, list[str], bool, dict[str, Any]]:
+    """A full rewrite of one caption of a finished job (see app.agents.captions.rewrite_caption).
 
-
-def rewrite_caption(ctx: AgentContext, current: str, others: list[str], instruction: str | None) -> tuple[str, list[str], bool]:
-    """Write a replacement for one caption of a finished job.
-
-    Returns (caption file text, unsupported-claim warnings, is_demo). Uses the same guardrails and
-    verified business context as the original run, and avoids repeating the job's other captions.
+    Returns (caption file text, warnings, is_demo, metadata). A real caption is never replaced by a demo
+    placeholder: without a cloud model this raises PROVIDER_NOT_CONFIGURED and the caption stays as it is.
     """
-    p = ctx.task.params or {}
-    lang = p.get("caption_language", "th")
-    platform = p.get("platform", "facebook")
+    lang = (ctx.task.params or {}).get("caption_language", "th")
     route = ctx.use_route(route_llm(ctx.session, ctx.job, ctx.org))  # type: ignore[arg-type]
     if route.demo or route.openai is None:
-        cap = Caption(
+        if not current_is_demo:
+            raise AgentError("PROVIDER_NOT_CONFIGURED",
+                             "No cloud AI model is available, so the caption was kept. Demo mode never replaces AI-written captions.")
+        cap = CaptionDraft(
             text=("[DEMO] แคปชันตัวอย่างที่สร้างใหม่จากโหมดสาธิต ยังไม่ได้สร้างโดย AI" if lang == "th"
                   else "[DEMO] Replacement caption from demo mode, not AI-generated."),
-            hashtags=["#DEMO"], call_to_action="[DEMO]",
+            hashtags=["#DEMO"], creative_angle="demo",
         )
-        return format_caption(cap), [], True
-    others_block = "\n---\n".join(o.strip() for o in others if o.strip()) or "(none)"
-    user = (
-        f"{prompts.context_block(ctx.business_context, ctx.brand)}\n\n"
-        f"Campaign command from the business owner:\n\"\"\"\n{ctx.job.command}\n\"\"\"\n\n"
-        f"Rewrite one caption for {platform} in {'Thai' if lang == 'th' else 'English'}. "
-        "Return it as `caption` (text, hashtags, call_to_action).\n"
-        f"The caption being replaced:\n\"\"\"\n{current.strip()}\n\"\"\"\n"
-        f"The campaign's other captions (use a different angle, do not repeat them):\n{others_block}\n"
-        + (f"Instruction from the business owner for the new caption: {instruction.strip()}\n" if instruction else "")
-    )
-    out, usage = route.openai.complete_json(prompts.CONTENT, user, CaptionRewrite)
-    ctx.record_usage("openai", "chat", {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens}, usage.cost_usd)
-    if lang == "th" and not has_thai(out.caption.text):
-        raise AgentError("CONTENT_WRONG_LANGUAGE", "The caption was requested in Thai but is not Thai")
-    return format_caption(out.caption), find_unsupported_claims([out.caption.text], ctx.business_context), False
+        return format_caption(cap), [], True, {"action": action}
+    stored, issues, meta = cw.rewrite_caption(ctx, route.openai, action=action,  # type: ignore[arg-type]
+                                              previous=current, others=others, feedback=instruction, tone=tone)
+    return stored, [x["detail"] for x in issues], False, meta

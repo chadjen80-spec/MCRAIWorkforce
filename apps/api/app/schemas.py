@@ -408,7 +408,11 @@ class ImageRegenerate(BaseModel):
 class CaptionRegenerate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # regenerate: a new creative approach; rewrite: same meaning, written anew; tone: same meaning in `tone`;
+    # shorten / expand: a coherent shorter or longer version. Every action is a full rewrite by the model.
+    action: Literal["regenerate", "rewrite", "tone", "shorten", "expand"] = "regenerate"
     instruction: str | None = Field(default=None, max_length=500)
+    tone: str | None = Field(default=None, max_length=40)
 
 
 class CaptionRegenerateResult(BaseModel):
