@@ -6,7 +6,8 @@ import { dictionaries } from "@/i18n/dictionaries";
 import type { Artifact, Job, QaReport, Task } from "@/lib/types";
 import { AgentGraph } from "./AgentGraph";
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+const { push } = vi.hoisted(() => ({ push: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 
 const th = dictionaries.th;
 afterEach(cleanup);
@@ -103,6 +104,26 @@ describe("AgentGraph V2: status rendering", () => {
     expect(panel.textContent).toContain(th["graph.qa.HUMAN_REVIEW"]);
     expect(panel.textContent).toContain("1 item needs review");
     expect(within(panel).getByRole("list", { name: th["graph.qa.checks"] }).textContent).toContain("caption length");
+  });
+
+  it("opens the job's results when the finished QA node is pressed", () => {
+    push.mockClear();
+    draw();
+    const node = screen.getAllByRole("button").find((b) => b.getAttribute("aria-label")?.startsWith(th["agent.qa"]))!;
+    expect(node.getAttribute("aria-label")).toContain(th["graph.qa.openResults"]);
+    fireEvent.click(node);
+    expect(push).toHaveBeenCalledWith(`/jobs/${job().id}#deliverables`);
+    expect(details().textContent).toContain(th["graph.qa.HUMAN_REVIEW"]); // the verdict is still explained
+    push.mockClear();
+    fireEvent.keyDown(node, { key: "Enter" });
+    expect(push).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not navigate from the QA node before QA has a verdict", () => {
+    push.mockClear();
+    draw(job({ qa_verdict: null }), {});
+    fireEvent.click(screen.getAllByRole("button").find((b) => b.getAttribute("aria-label")?.startsWith(th["agent.qa"]))!);
+    expect(push).not.toHaveBeenCalled();
   });
 
   it("falls back to the job's own QA fields when no report was loaded", () => {

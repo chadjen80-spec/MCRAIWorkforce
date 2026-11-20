@@ -1070,7 +1070,9 @@ export default function AssistantPage() {
             placeholder={posterMode ? t("assistant.typePlaceholder") : t("composer.placeholder")}
             note={filled ? t("composer.filled") : undefined}
           />
-          <p className="text-sm leading-relaxed text-dim">{t("assistant.hint")}</p>
+          <p className="text-sm leading-relaxed text-dim" title={t("voice.privacy")}>
+            {t("assistant.hint")}
+          </p>
           <p className="hidden text-sm leading-relaxed text-dim md:block">{t("assistant.keys")}</p>
         </div>
       </div>

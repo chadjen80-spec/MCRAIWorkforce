@@ -444,7 +444,8 @@ export function AgentGraph({
   const same = (a: Selection | null, b: Selection) =>
     !!a && a.kind === b.kind && (a.kind !== "agent" || a.agent === (b as { agent: HubAgent }).agent) && (a.kind !== "task" || a.taskId === (b as { taskId: string }).taskId);
   const select = (s: Selection) => setSelection((cur) => (same(cur, s) ? null : s));
-  const nodeProps = (s: Selection, label: string) => ({
+  // `then` runs after selecting, e.g. the finished QA node also opens the job's results.
+  const nodeProps = (s: Selection, label: string, then?: () => void) => ({
     role: "button" as const,
     tabIndex: 0,
     "aria-pressed": same(selection, s),
@@ -452,13 +453,17 @@ export function AgentGraph({
     "aria-controls": "graph-details",
     onClick: (e: React.MouseEvent) => {
       e.stopPropagation();
-      select(s);
+      if (then) setSelection(s);
+      else select(s);
+      then?.();
     },
     onKeyDown: (e: React.KeyboardEvent) => {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         e.stopPropagation();
-        select(s);
+        if (then) setSelection(s);
+        else select(s);
+        then?.();
       }
     },
     className: "cursor-pointer outline-none [&:focus-visible_.ag-focus]:opacity-100",
@@ -665,6 +670,8 @@ export function AgentGraph({
             const state = hubState(list);
             const sats = list.length > 1 ? satellitePoints(p, list.length, L.r.orbit) : [];
             const line = agent === "qa" && qaVerdict ? `${qaVerdict} · ${hubLine(list)}` : hubLine(list);
+            // Once QA has a verdict, its node is the way to the work: pressing it opens the job's results.
+            const openResults = agent === "qa" && qaVerdict ? openFiles : undefined;
             return (
               <g key={agent} data-agent={agent}>
                 {sats.length > 0 && <circle cx={p.x} cy={p.y} r={L.r.orbit} fill="none" stroke={COLORS[state].glow} strokeOpacity={0.3} strokeDasharray="2 6" pointerEvents="none" />}
@@ -683,7 +690,14 @@ export function AgentGraph({
                       </g>
                     );
                   })}
-                <g {...nodeProps({ kind: "agent", agent }, `${tx("agent", agent)}: ${t(`graph.state.${state}`)}. ${line}`)}>
+                <g
+                  {...nodeProps(
+                    { kind: "agent", agent },
+                    `${tx("agent", agent)}: ${t(`graph.state.${state}`)}. ${line}${openResults ? `. ${t("graph.qa.openResults")}` : ""}`,
+                    openResults,
+                  )}
+                >
+                  {openResults && <title>{t("graph.qa.openResults")}</title>}
                   <HexNode
                     p={p}
                     r={L.r.hub}
