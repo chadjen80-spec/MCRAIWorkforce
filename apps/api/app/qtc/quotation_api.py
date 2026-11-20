@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db, utcnow
 from app.deps import Principal, get_principal, require_admin
 from app.errors import AppError, forbidden, not_found
-from app.qtc import audit
+from app.qtc import audit, events
 from app.qtc import documents as docs
 from app.qtc import quotations as engine
 from app.qtc import schemas as s
@@ -267,6 +267,8 @@ def submit_quotation(qid: uuid.UUID, principal: Principal = Depends(require_user
                                   snapshot=engine.snapshot(q, lines, customer), grand_total=q.grand_total,
                                   reason="submitted" if q.revision == 1 else "revision submitted", created_by=principal.actor))
     audit.record(session, org_id, "quotation", q.id, "quotation.submitted", principal.actor, {"revision": q.revision, "total": q.grand_total})
+    events.emit(session, org_id, "quotation.submitted", f"quotation.submitted:{q.id}:r{q.revision}",
+                events.quotation_data(session, q, submitted_by=principal.actor))
     session.commit()
     return _out(session, q)
 
@@ -291,6 +293,10 @@ def approve_quotation(qid: uuid.UUID, body: s.ApproveIn, principal: Principal = 
         q.revision += 1
     audit.record(session, org_id, "quotation", q.id, f"quotation.{body.decision}", principal.actor,
                  {"revision": q.revision, "comment": body.comment, "self_approved": q.submitted_by == principal.actor})
+    decided_revision = q.revision if body.decision == "approved" else q.revision - 1
+    events.emit(session, org_id, "quotation.decided", f"quotation.decided:{q.id}:r{decided_revision}",
+                events.quotation_data(session, q, decision=body.decision, decided_by=principal.actor, comment=body.comment,
+                                      decided_revision=decided_revision))
     session.commit()
     return _out(session, q)
 
@@ -337,6 +343,8 @@ def accept_quotation(qid: uuid.UUID, body: s.AcceptIn, response: Response, princ
     q.acceptance = {"accepted_by_name": body.accepted_by_name, "method": body.method, "reference": body.reference,
                     "note": body.note, "evidence_url": body.evidence_url, "recorded_by": principal.actor}
     audit.record(session, org_id, "quotation", q.id, "quotation.accepted", principal.actor, {"revision": q.revision, **q.acceptance})
+    events.emit(session, org_id, "quotation.accepted", f"quotation.accepted:{q.id}",
+                events.quotation_data(session, q, accepted_by_name=body.accepted_by_name, method=body.method))
     session.commit()
     return _out(session, q)
 

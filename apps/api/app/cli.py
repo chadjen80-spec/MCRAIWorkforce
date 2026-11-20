@@ -1,7 +1,7 @@
 """Operational commands.
 
     python -m app.cli seed                 create organization + owner from BOOTSTRAP_* env vars (idempotent)
-    python -m app.cli create-api-key NAME  print a new service API key once (e.g. NAME=n8n)
+    python -m app.cli create-api-key NAME [--scopes a,b]  print a new service API key once (default scope: jobs)
     python -m app.cli generate-secrets     print fresh JWT_SECRET / SECRETS_ENCRYPTION_KEY values
     python -m app.cli reap                 run the lease reaper once
     python -m app.cli seed-qtc-demo        add example customers, services and a DRAFT price list (Quote-to-Cash)
@@ -52,14 +52,22 @@ def seed() -> int:
     return 0
 
 
-def create_api_key(name: str) -> int:
+def create_api_key(name: str, scopes: list[str] | None = None) -> int:
+    from app.deps import SCOPES
+
+    scopes = scopes or ["jobs"]
+    unknown = [x for x in scopes if x not in SCOPES]
+    if unknown:
+        print(f"Unknown scope(s): {', '.join(unknown)}. Known: {', '.join(SCOPES)}", file=sys.stderr)
+        return 2
     with session_scope() as session:
         org = session.scalar(select(Organization).order_by(Organization.created_at))
         if org is None:
             print("No organization yet. Run: python -m app.cli seed", file=sys.stderr)
             return 2
         key, prefix, digest = generate_api_key()
-        session.add(ApiKey(organization_id=org.id, name=name, key_prefix=prefix, key_hash=digest))
+        session.add(ApiKey(organization_id=org.id, name=name, key_prefix=prefix, key_hash=digest, scopes=scopes))
+    print(f"Scopes: {', '.join(scopes)}")
     print(f"API key '{name}' for organization '{org.name}' (shown once, store it in your secret manager):\n{key}")
     return 0
 
@@ -86,7 +94,13 @@ def main(argv: list[str]) -> int:
     if cmd == "seed":
         return seed()
     if cmd == "create-api-key":
-        return create_api_key(argv[1] if len(argv) > 1 else "service")
+        rest = argv[1:]
+        scopes = None
+        if "--scopes" in rest:
+            i = rest.index("--scopes")
+            scopes = [x.strip() for x in (rest[i + 1] if i + 1 < len(rest) else "").split(",") if x.strip()]
+            rest = rest[:i] + rest[i + 2 :]
+        return create_api_key(rest[0] if rest else "service", scopes)
     if cmd == "generate-secrets":
         print(f"JWT_SECRET={secrets.token_urlsafe(48)}")
         print(f"SECRETS_ENCRYPTION_KEY={Fernet.generate_key().decode()}")

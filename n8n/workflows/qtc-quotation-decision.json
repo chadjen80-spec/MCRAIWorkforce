@@ -1,0 +1,259 @@
+{
+  "name": "MCR QTC: Quotation approval decision",
+  "nodes": [
+    {
+      "id": "event-webhook",
+      "name": "Event Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mcr-qtc-quotation-decided",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "webhookId": "mcr-qtc-quotation-decided"
+    },
+    {
+      "id": "verify-signature",
+      "name": "Verify Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Accept only events signed by the MCR API: HMAC-SHA256(MCR_EVENTS_SECRET, timestamp + \".\" + raw body),\n// sent within the last 5 minutes. The secret comes from n8n's environment, never from this workflow.\nconst crypto = require('crypto');\nconst secret = $env.MCR_EVENTS_SECRET || '';\nconst item = $input.first();\nconst h = item.json.headers || {};\nlet raw = '';\nif (item.binary && item.binary.data) {\n  raw = (await this.helpers.getBinaryDataBuffer(0, 'data')).toString('utf8');\n} else {\n  raw = JSON.stringify(item.json.body);\n}\nconst ts = Number(h['x-mcr-timestamp']);\nconst sig = String(h['x-mcr-signature'] || '');\nconst expected = 'sha256=' + crypto.createHmac('sha256', secret).update(ts + '.' + raw).digest('hex');\nconst fresh = Number.isFinite(ts) && Math.abs(Date.now() / 1000 - ts) <= 300;\nconst same = sig.length === expected.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));\nconst valid = secret.length >= 32 && fresh && same;\nlet event = null;\nif (valid) event = JSON.parse(raw);\nconst type = event && event.type;\nreturn [{ json: { valid: valid && type === \"quotation.decided\", event,\n  reason: !secret ? 'MCR_EVENTS_SECRET is not set' : !fresh ? 'stale or missing timestamp' : !same ? 'bad signature' : 'unexpected event type' } }];"
+      }
+    },
+    {
+      "id": "signature-valid",
+      "name": "Signature Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "respond-202",
+      "name": "Respond 202",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        200
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ received: $json.event.id }) }}",
+        "options": {
+          "responseCode": 202
+        }
+      }
+    },
+    {
+      "id": "respond-401",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        440
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: 'INVALID_SIGNATURE', message: $json.reason } }) }}",
+        "options": {
+          "responseCode": 401
+        }
+      }
+    },
+    {
+      "id": "compose-message",
+      "name": "Compose Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        200
+      ],
+      "parameters": {
+        "jsCode": "const money = v => Number(v || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' บาท';\nconst app = ($env.MCR_APP_URL || 'http://localhost:3000').replace(/\\/$/, '');\nconst e = $('Signature Valid?').first().json.event;\nconst d = e.data;\nconst label = { approved: 'อนุมัติแล้ว', rejected: 'ไม่อนุมัติ', changes_requested: 'ขอให้แก้ไข' }[d.decision] || d.decision;\nreturn [{ json: { event_type: e.type, text: `ใบเสนอราคา ${d.number} ของ ${d.customer}: ${label} โดย ${d.decided_by}` + (d.comment ? `\\nความเห็น: ${d.comment}` : ''), link: app + (d.link || '/qtc') } }];"
+      }
+    },
+    {
+      "id": "notify-configured",
+      "name": "Notify Configured?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ !!$env.MCR_NOTIFY_WEBHOOK_URL }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "notify-team",
+      "name": "Notify Team",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        180
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MCR_NOTIFY_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.text, event: $json.event_type, link: $json.link }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Notify Configured?": {
+      "main": [
+        [
+          {
+            "node": "Notify Team",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Event Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify Signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Signature": {
+      "main": [
+        [
+          {
+            "node": "Signature Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature Valid?": {
+      "main": [
+        [
+          {
+            "node": "Respond 202",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond 202": {
+      "main": [
+        [
+          {
+            "node": "Compose Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose Message": {
+      "main": [
+        [
+          {
+            "node": "Notify Configured?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "executionTimeout": 300
+  },
+  "active": false,
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

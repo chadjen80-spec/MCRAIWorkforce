@@ -1,0 +1,331 @@
+{
+  "name": "MCR QTC: New customer inquiry",
+  "nodes": [
+    {
+      "id": "inquiry-webhook",
+      "name": "Inquiry Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mcr-qtc-inquiry",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "MCR Webhook Auth"
+        }
+      },
+      "webhookId": "mcr-qtc-inquiry"
+    },
+    {
+      "id": "validate-inquiry",
+      "name": "Validate Inquiry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body || {};\nconst message = String(b.message || b.text || '').trim();\nconst parts = [message];\nfor (const [k, label] of [['company', 'บริษัท'], ['name', 'ผู้ติดต่อ'], ['email', 'อีเมล'], ['phone', 'โทร']]) {\n  if (typeof b[k] === 'string' && b[k].trim()) parts.push(`${label}: ${b[k].trim().slice(0, 200)}`);\n}\nconst text = parts.join('\\n').slice(0, 4000);\nreturn [{ json: { valid: message.length >= 5, text, errors: message.length >= 5 ? [] : ['message must be at least 5 characters'] } }];"
+      }
+    },
+    {
+      "id": "inquiry-valid",
+      "name": "Inquiry Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "respond-400",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: 'VALIDATION_ERROR', message: $json.errors.join('; ') } }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    },
+    {
+      "id": "sales-intake-agent",
+      "name": "Sales Intake Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        280
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MCR_API_URL }}/v1/qtc/agents/sales-intake",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.text }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_AFTER_IMPORT",
+          "name": "MCR QTC Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "respond-202",
+      "name": "Respond 202",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        200
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ received: true }) }}",
+        "options": {
+          "responseCode": 202
+        }
+      }
+    },
+    {
+      "id": "respond-502",
+      "name": "Respond 502",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        440
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: 'INTAKE_FAILED', message: 'The inquiry could not be processed' } }) }}",
+        "options": {
+          "responseCode": 502
+        }
+      }
+    },
+    {
+      "id": "compose-message",
+      "name": "Compose Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        200
+      ],
+      "parameters": {
+        "jsCode": "const money = v => Number(v || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' บาท';\nconst app = ($env.MCR_APP_URL || 'http://localhost:3000').replace(/\\/$/, '');\nconst r = $('Sales Intake Agent').first().json;\nconst who = r.customer ? `ลูกค้าเดิม ${r.customer.name} (${r.customer.code})`\n  : r.customer_candidates.length ? `อาจเป็น: ${r.customer_candidates.map(c => c.name).join(', ')}`\n  : `ลูกค้าใหม่ ${r.new_customer.name || ''} ${r.new_customer.email || ''} ${r.new_customer.phone || ''}`.trim();\nconst services = r.services.map(s => s.name).join(', ') || 'ยังไม่ตรงกับบริการในแคตตาล็อก';\nconst extra = r.unlisted_items.length ? `\\nรายการนอกแคตตาล็อก (ต้องกำหนดราคาเอง): ${r.unlisted_items.join(', ')}` : '';\nconst link = r.customer ? '/qtc/customers/' + r.customer.id : '/qtc/customers';\nreturn [{ json: { event_type: 'customer.inquiry', link: app + link,\n  text: `มีคำขอใบเสนอราคาใหม่\\n${who}\\nบริการ: ${services}${extra}\\nเปิดดู: ${app}${link}` } }];"
+      }
+    },
+    {
+      "id": "notify-configured",
+      "name": "Notify Configured?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ !!$env.MCR_NOTIFY_WEBHOOK_URL }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "notify-team",
+      "name": "Notify Team",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        180
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MCR_NOTIFY_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.text, event: $json.event_type, link: $json.link }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Notify Configured?": {
+      "main": [
+        [
+          {
+            "node": "Notify Team",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inquiry Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Inquiry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Inquiry": {
+      "main": [
+        [
+          {
+            "node": "Inquiry Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inquiry Valid?": {
+      "main": [
+        [
+          {
+            "node": "Sales Intake Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sales Intake Agent": {
+      "main": [
+        [
+          {
+            "node": "Respond 202",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 502",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond 202": {
+      "main": [
+        [
+          {
+            "node": "Compose Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose Message": {
+      "main": [
+        [
+          {
+            "node": "Notify Configured?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "executionTimeout": 300
+  },
+  "active": false,
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

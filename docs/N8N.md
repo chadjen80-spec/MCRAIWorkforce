@@ -69,3 +69,59 @@ curl.exe -X POST http://localhost:5678/webhook/mcr-ai-workforce ^
 Optional body fields: `agents`, `budget_limit_usd`, `language`, `aspect_ratio`, `require_approval`,
 `data_classification`, `request_id` (used for idempotency; repeated calls with the same value return
 the same job).
+
+---
+
+# Quote-to-Cash workflows (Phase E)
+
+Files: `n8n/workflows/qtc-*.json` (regenerate with `python n8n/build_qtc_workflows.py`). They notify the
+**team** (an internal channel at `MCR_NOTIFY_WEBHOOK_URL`). They never message customers: the API has no sending
+of quotations or reminders.
+
+| File | Trigger | What the team gets |
+|---|---|---|
+| `qtc-new-customer-inquiry.json` | `POST /webhook/mcr-qtc-inquiry` (Header Auth) from a website form | Matched or new customer, requested services, items that need a price |
+| `qtc-quotation-approval.json` | event `quotation.submitted` | "QT-… waits for approval", with the link |
+| `qtc-quotation-decision.json` | event `quotation.decided` | Approved / changes requested / rejected, by whom, comment |
+| `qtc-quotation-accepted.json` | event `quotation.accepted` | Customer accepted QT-…; next step: create the sales order |
+| `qtc-invoice-due-reminder.json` | event `invoice.due_soon` (3 days before) | Internal reminder that INV-… is due |
+| `qtc-overdue-payment-alert.json` | event `invoice.overdue` | INV-… is N days overdue, balance; prepare a reminder draft with Mira |
+| `qtc-weekly-receivables.json` | event `receivables.weekly_summary` (once per ISO week) | Outstanding, overdue, cash received, pipeline |
+
+## Signed events instead of polling
+
+The API writes each event in the same transaction as the change (an outbox table, `qtc_events`) and the
+maintenance worker POSTs it to `{QTC_EVENTS_URL}-{slug}`, e.g. `http://n8n:5678/webhook/mcr-qtc-invoice-overdue`:
+
+```
+X-MCR-Event: invoice.overdue
+X-MCR-Event-Id: <uuid>
+X-MCR-Timestamp: <unix seconds>
+X-MCR-Signature: sha256=<hex HMAC-SHA256(QTC_EVENTS_SECRET, "<timestamp>.<raw body>")>
+```
+
+Each workflow's **Verify Signature** node recomputes the HMAC over the raw body with `MCR_EVENTS_SECRET` (from
+n8n's environment), requires the timestamp within 5 minutes and the expected event type, and answers 401
+otherwise. Failed deliveries are retried with backoff (8 attempts), then marked `failed` in `qtc_events`. Each
+event is created once (`dedupe_key`), so the hourly scan never repeats an alert.
+
+## Setup
+
+1. Put a secret of at least 32 characters in `.env` (the API and n8n read the same value):
+   ```
+   QTC_EVENTS_SECRET=<python -c "import secrets; print(secrets.token_urlsafe(48))">
+   MCR_APP_URL=https://app.example.com
+   ```
+   then `docker compose up -d` (recreates api, workers and n8n). Until it is set, events are recorded but not sent.
+2. For the inquiry workflow only, create a **scoped** key (it can read Quote-to-Cash data and call the read-only
+   Sales Intake Agent, nothing else):
+   ```
+   docker compose exec api python -m app.cli create-api-key n8n-qtc --scopes qtc:read,qtc:intake
+   ```
+   In n8n create a Header Auth credential **MCR QTC Key** (`X-API-Key` = that key). The webhook uses the existing
+   **MCR Webhook Auth** credential.
+3. Import the `qtc-*.json` files, select the credentials in the inquiry workflow, activate all seven.
+
+Key scopes: `jobs` (creative jobs), `qtc:read`, `qtc:intake`. Keys created before scopes existed keep `jobs` and
+`qtc:read`; new keys get only what `--scopes` lists (default `jobs`). Service keys never approve, confirm or
+change records, whatever their scopes.

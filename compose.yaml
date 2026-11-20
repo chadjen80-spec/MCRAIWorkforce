@@ -26,6 +26,9 @@ x-api-env: &api-env
   COMFYUI_URL: ${COMFYUI_URL:-}
   COMFYUI_CHECKPOINT: ${COMFYUI_CHECKPOINT:-sd_xl_base_1.0.safetensors}
   BOOTSTRAP_ORG_NAME: ${BOOTSTRAP_ORG_NAME:-MCR Technology}
+  # Signed Quote-to-Cash events to n8n (nothing is delivered while QTC_EVENTS_SECRET is empty)
+  QTC_EVENTS_URL: ${QTC_EVENTS_URL:-http://n8n:5678/webhook/mcr-qtc}
+  QTC_EVENTS_SECRET: ${QTC_EVENTS_SECRET:-}
   BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
   BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
 
@@ -174,6 +177,9 @@ services:
       MCR_API_URL: http://api:8000
       MCR_NOTIFY_WEBHOOK_URL: ${MCR_NOTIFY_WEBHOOK_URL:-}
       GENERIC_TIMEZONE: Asia/Bangkok
+      MCR_EVENTS_SECRET: ${QTC_EVENTS_SECRET:-}   # verifies the signature of Quote-to-Cash events
+      MCR_APP_URL: ${MCR_APP_URL:-http://localhost:3000}
+      NODE_FUNCTION_ALLOW_BUILTIN: crypto          # the Verify Signature node uses Node's crypto module
     volumes:
       - n8n-data:/home/node/.n8n
       - ./n8n/workflows:/workflows:ro

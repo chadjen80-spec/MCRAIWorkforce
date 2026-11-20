@@ -1,33 +1,38 @@
 "use client";
 
 import Link from "next/link";
+import { QtcDashboard, type QtcSummary } from "@/components/qtc/QtcDashboard";
 import { QtcError, QtcShell } from "@/components/qtc/QtcShell";
-import { Badge, Card, LoadingBlock } from "@/components/ui";
+import { LoadingBlock } from "@/components/ui";
 import { useI18n } from "@/i18n/I18nProvider";
 import { api } from "@/lib/api";
-import { formatRate, type Customer, type Page, type PriceList, type Quotation, type Service } from "@/lib/qtc";
+import { formatRate, type Customer, type Page, type PriceList, type Service } from "@/lib/qtc";
 import { useApi } from "@/lib/useApi";
 
 interface Overview {
   customers: number;
-  quotesWaiting: number;
   services: number;
   priceList: PriceList | null;
+  summary: QtcSummary;
 }
 
 export default function QtcOverviewPage() {
   const { t, dateTime } = useI18n();
   const data = useApi<Overview>("qtc:overview", async (signal) => {
-    const [customers, services, lists, waiting] = await Promise.all([
+    const [customers, services, lists, summary] = await Promise.all([
       api<Page<Customer>>("/v1/qtc/customers", { query: { limit: 1 }, signal }),
       api<Page<Service>>("/v1/qtc/services", { query: { limit: 1 }, signal }),
       api<Page<PriceList>>("/v1/qtc/price-lists", { query: { status: "active", limit: 20 }, signal }),
-      api<Page<Quotation>>("/v1/qtc/quotations", { query: { status: "pending_approval", limit: 1 }, signal }),
+      api<QtcSummary>("/v1/qtc/dashboard", { signal }),
     ]);
-    return { customers: customers.total, quotesWaiting: waiting.total, services: services.total, priceList: lists.items.find((p) => p.is_default) ?? lists.items[0] ?? null };
+    return {
+      customers: customers.total,
+      services: services.total,
+      priceList: lists.items.find((p) => p.is_default) ?? lists.items[0] ?? null,
+      summary,
+    };
   });
   const d = data.data;
-  const planned = ["qtc.overview.dashboard"] as const;
 
   return (
     <QtcShell>
@@ -37,11 +42,9 @@ export default function QtcOverviewPage() {
         <LoadingBlock />
       ) : (
         <div className="space-y-6">
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <Link href="/qtc/quotations" className={`rounded-2xl border bg-surface p-4 transition hover:border-brand-soft/60 ${d.quotesWaiting ? "border-warn/60" : "border-line"}`}>
-              <p className={`text-3xl font-bold tabular-nums ${d.quotesWaiting ? "text-warn" : "text-ink"}`}>{d.quotesWaiting}</p>
-              <p className="text-sm text-dim">{t("qtc.overview.quotesWaiting")}</p>
-            </Link>
+          <QtcDashboard summary={d.summary} />
+          <h2 className="text-lg font-semibold text-ink">{t("qtc.dash.setup")}</h2>
+          <div className="grid gap-4 sm:grid-cols-3">
             <Link href="/qtc/customers" className="rounded-2xl border border-line bg-surface p-4 transition hover:border-brand-soft/60">
               <p className="text-3xl font-bold tabular-nums text-ink">{d.customers}</p>
               <p className="text-sm text-dim">{t("qtc.overview.customers")}</p>
@@ -65,18 +68,6 @@ export default function QtcOverviewPage() {
               )}
             </Link>
           </div>
-          <Card>
-            <h2 className="text-lg font-semibold text-ink">{t("qtc.overview.next")}</h2>
-            <p className="text-sm text-dim">{t("qtc.overview.nextHint")}</p>
-            <ul className="mt-3 space-y-2">
-              {planned.map((key) => (
-                <li key={key} className="flex flex-wrap items-center gap-2 text-sm text-dim">
-                  <Badge>{t("qtc.planned")}</Badge>
-                  {t(key)}
-                </li>
-              ))}
-            </ul>
-          </Card>
         </div>
       )}
     </QtcShell>

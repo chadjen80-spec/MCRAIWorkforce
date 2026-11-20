@@ -1,6 +1,6 @@
 # Quote-to-Cash: implementation report
 
-Date: 2026-11-20 · Phases A (`2186a66`), B (`0725dd2`) and C (`abd86aa`) on `main`; Phase D in the working tree (uncommitted at the time of writing)
+Date: 2026-11-20 · Phases A (`2186a66`), B (`0725dd2`), C (`abd86aa`) and D (`a604647`) on `main`; Phase E in the working tree (uncommitted at the time of writing)
 
 ## Status by phase
 
@@ -10,9 +10,94 @@ Date: 2026-11-20 · Phases A (`2186a66`), B (`0725dd2`) and C (`abd86aa`) on `ma
 | **B** | Quotation engine, approval, revisions, acceptance, Thai PDF / DOCX | **Done and tested** (SQLite and PostgreSQL) |
 | **C** | Sales orders, billing schedule, invoices, payments, receivables | **Done and tested** (SQLite and PostgreSQL); credit notes and tax documents **designed, not built** |
 | **D** | AI agents (SalesIntake, Quotation, Finance, Collection), agent registry, Mira intents | **Done and tested** (SQLite, PostgreSQL, browser); sending reminders is **not available, by design** |
-| E | n8n workflows, QTC dashboard, end-to-end tests | Not started |
+| **E** | Dashboard, signed n8n events, seven workflows, scoped keys, end-to-end tests | **Done and tested** (SQLite, PostgreSQL, browser, all seven workflows in real n8n) |
 
-Nothing beyond Phase D is claimed. The `/qtc` overview lists the dashboard (Phase E) as "Planned" text.
+All five phases are built. What is deliberately not built: credit notes, tax invoices / receipts (designed, behind
+a setting), and any sending to customers.
+
+## Phase E: what exists
+
+### Database (migration `0011`)
+
+- `qtc_events`: the outbox (event type, `dedupe_key` unique per organization, payload, status pending / delivered /
+  failed, attempts, next attempt, last error).
+- `api_keys.scopes`: NULL for keys created before scopes (they keep `jobs` and `qtc:read`, exactly what they had).
+
+### Scoped integration keys (`app/deps.py`)
+
+| Scope | Reaches |
+|---|---|
+| `jobs` | `/v1/jobs…` and the rest of the creative API |
+| `qtc:read` | `GET /v1/qtc/…`, the dashboard, Mira's read-only answers |
+| `qtc:intake` | `POST /v1/qtc/agents/sales-intake` (read-only) |
+
+Enforced in `get_principal` from the request path, so no endpoint can forget it. `create-api-key NAME --scopes
+qtc:read,qtc:intake` (default `jobs`; unknown scopes refused). Scopes never lift the role rules: service keys still
+cannot approve, confirm or change records.
+
+### Signed outbound events (`app/qtc/events.py`)
+
+| Event | Emitted when | Dedupe key |
+|---|---|---|
+| `quotation.submitted` | a quotation is submitted for approval | quotation + revision |
+| `quotation.decided` | an owner / admin decides | quotation + decided revision |
+| `quotation.accepted` | the customer's acceptance is recorded | quotation |
+| `invoice.due_soon` | hourly scan: due within `QTC_DUE_SOON_DAYS` (3) | invoice + due date |
+| `invoice.overdue` | hourly scan: past due with a balance | invoice + due date |
+| `receivables.weekly_summary` | hourly scan, once per ISO week, for organizations that use Quote-to-Cash | week |
+
+- Written in the transaction of the change (outbox), so there is never an event for a change that was rolled
+  back, and never a change without its event.
+- Delivered by the maintenance worker every 15 s, one row per transaction with `FOR UPDATE SKIP LOCKED`, so
+  parallel workers never send an event twice (tested on PostgreSQL with four workers).
+- HMAC-SHA256 over `timestamp.raw body`; retries with exponential backoff up to 8 attempts, then `failed`.
+- Payloads carry numbers, names, amounts (as strings) and links, never customer contact details or tax IDs.
+- Nothing is delivered until `QTC_EVENTS_URL` and a secret of 32+ characters are set.
+
+### Dashboard (`GET /v1/qtc/dashboard`, `app/qtc/dashboard.py`; page `/qtc`)
+
+Pipeline (open, unexpired quotations), quotations awaiting approval, accepted this month, outstanding receivables,
+overdue invoices, cash received this month (confirmed payments only). Each figure has a count and an exact amount
+and links to the filtered list. The page has loading, error, empty ("create a quotation first") and
+permission-denied states. The weekly summary event and Mira's receivables answer use the same queries.
+
+### n8n workflows (`n8n/workflows/qtc-*.json`, built by `n8n/build_qtc_workflows.py`)
+
+Seven workflows (approval is split into "waiting for approval" and "decision"): new customer inquiry, quotation
+approval notification, approval decision, quotation acceptance, invoice due-date reminder, overdue payment alert,
+weekly receivables summary. Six are event-driven (no polling). No credential is embedded: the event secret comes
+from n8n's environment, the inquiry workflow refers to the credentials "MCR Webhook Auth" and "MCR QTC Key" by
+name. All notify the team; none contacts customers. Setup: `docs/N8N.md`.
+
+### Phase E tests
+
+| Suite | Result |
+|---|---|
+| `tests/test_qtc_phase_e.py` on SQLite | 11 passed (1 skipped: parallel delivery, PostgreSQL only) |
+| All QTC tests (A–E) on **PostgreSQL 17** | 103 passed, including four parallel delivery workers |
+| Migrations on PostgreSQL | `0011` upgrade, `alembic check` clean, downgrade to `0010`, upgrade again |
+| Full backend suite | 201 passed, 1 skipped (the PostgreSQL-only test above) |
+| Frontend (Vitest) | 126 passed (3 new: dashboard figures and links, empty state, permission denied) |
+| ruff, mypy, ESLint, TypeScript, `next build` | clean |
+| Browser (dev stack) | `/qtc` shows the six figures from real data (accepted 49,755.54; outstanding 4,926.66; cash received 10,000.00) |
+| **Real n8n** (Docker test stack) | six event workflows imported and active; a quotation submitted, approved and accepted, an order and invoice issued, the invoice made overdue, the scan run: all five events delivered (1 attempt each), each passed n8n's signature check and produced the Thai team message; a forged event got 401. Inquiry workflow with a key scoped to `qtc:read,qtc:intake`: no or wrong token 403, too short 400, an existing customer recognised (C0001), a new customer's company, contact, email and phone passed to the team message |
+
+Covered: scope enforcement (legacy, jobs-only, Quote-to-Cash keys), events recorded once with the change,
+signature verification (tampering, wrong secret, replay after 5 minutes, wrong event type), the workflow's own
+JavaScript check run in Node against the Python signer, backoff and failure, no delivery without configuration,
+idempotent scans, an end-to-end quote-to-cash flow with exact dashboard figures and reconciliation
+(received + outstanding = billed), dashboard tenant isolation, and workflow files without credentials and without
+open webhooks.
+
+Found and fixed in the n8n run: the Sales Intake Agent ignored the labelled lines the workflow sends ("บริษัท: …",
+"ผู้ติดต่อ: …"), so a new customer had no name without AI; it now reads them (tested).
+
+Invoice due-date reminder in n8n: an invoice due in 2 days, the scan emitted one `invoice.due_soon` event,
+delivered on the first attempt, signature valid, team message "ใบแจ้งหนี้ … ครบกำหนด 2026-11-22 ยอดคงค้าง
+10,700.00 บาท"; a second scan emitted nothing.
+
+Not tested: delivery to a real team channel (`MCR_NOTIFY_WEBHOOK_URL` was empty, so the notify step
+was skipped).
 
 ## Phase D: what exists
 
@@ -353,7 +438,7 @@ brief (quote revision, quote-to-order, payments, overpayments, cancellation, rec
 belong to phases B–D (quote revision is now covered by Phase B; the rest is **not tested yet** because it is not
 built yet).
 
-## Security review (Phases A to D)
+## Security review (Phases A to E)
 
 - Quotations: approval by signed-in owner / admin only (members and service keys get 403); self-approval is allowed
   for small teams but recorded (`self_approved` in the audit event); unapproved documents are never rendered for
@@ -372,22 +457,26 @@ built yet).
   but `send` always returns 403.
 - Agents (Phase D): AI schemas carry no prices or amounts, AI text is validated before use, AI runs only on request
   and within budget, and anything that writes needs a signed-in person to confirm.
+- Integrations (Phase E): keys are scoped (`jobs`, `qtc:read`, `qtc:intake`) and enforced centrally; outbound
+  events are HMAC-signed with a timestamp, verified by n8n before any step runs, carry no contact details or tax
+  IDs, and go only to the configured internal n8n URL. n8n notifies the team; no workflow contacts customers.
 
-Open hardening items that will block external operations in later phases (from
+Scoped credentials now exist (Phase E). Still open, and still blocking any sending to customers (from
 `docs/PRODUCTION_HARDENING_REPORT.md`): no API-key revocation command; Windows worker pool without hard time limits;
-budget reservations only for agent calls. External sending (emailing a quotation from the system, Phase D
-reminders) must stay disabled until scoped credentials, consent checks and approval gates are in place; Phase B
-deliberately has no such sending.
+budget reservations only for agent calls; no consent records with dates and sources (only consent flags on
+contacts); no sending integration with its own approval gate. Sending quotations or reminders from the system stays
+disabled (`send` returns 403) until these are done.
 
 ## Setup
 
 ```powershell
 cd apps/api
-uv run alembic upgrade head          # applies 0007 to 0010
+uv run alembic upgrade head          # applies 0007 to 0011
 uv run python -m app.cli seed-qtc-demo   # optional example data
 ```
 
 Restart the API after upgrading (the dev server runs without auto-reload). Open `/qtc` in the dashboard.
+For the n8n workflows (events, scoped key, import), see `docs/N8N.md` → "Quote-to-Cash workflows".
 
 ## Decisions carried into the next phases
 

@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     # Quote-to-Cash: tax invoices and receipts (ใบกำกับภาษี / ใบเสร็จรับเงิน) are NOT issued by the system until
     # Thai legal and accounting requirements (Revenue Code formats, numbering, e-Tax rules) are verified.
     qtc_tax_documents_enabled: bool = False
+    # Signed Quote-to-Cash events to n8n. Each event type is POSTed to f"{qtc_events_url}-{slug}", e.g.
+    # http://n8n:5678/webhook/mcr-qtc-quotation-submitted. Nothing is delivered until both are set.
+    qtc_events_url: str = ""
+    qtc_events_secret: str = ""  # HMAC-SHA256 key, at least 32 characters; n8n reads the same value from its env
+    qtc_due_soon_days: int = 3
     default_job_budget_usd: Decimal = Decimal("5")
     default_monthly_budget_usd: Decimal = Decimal("50")
 

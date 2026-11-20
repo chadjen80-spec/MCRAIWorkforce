@@ -118,7 +118,10 @@ class SalesIntakeAgent:
         )
         email = (ai.email if ai else "") or next(iter(re.findall(r"[\w.+-]+@[\w-]+\.[\w.]+", text)), "")
         phone = (ai.phone if ai else "") or next(iter(re.findall(r"(?:\+66|0)\d[\d -]{7,11}\d", text)), "")
-        customer = find_customer(s, org_id, text, (ai.customer_name if ai else ""))
+        # Labelled lines, as the n8n inquiry workflow and most web forms send them ("บริษัท: …", "Name: …").
+        company = _field(text, r"บริษัท|company|organi[sz]ation")
+        contact = _field(text, r"ผู้ติดต่อ|contact|name|ชื่อ")
+        customer = find_customer(s, org_id, text, (ai.customer_name if ai else "") or company)
         services = [
             {"service_id": str(svc.id), "code": svc.code, "name": svc.name, "matched": word} for svc, word in engine.match_brief(s, org_id, text)
         ]
@@ -133,11 +136,21 @@ class SalesIntakeAgent:
             "customer_candidates": [customer_brief(c) for c in customer] if isinstance(customer, list) else [],
             "new_customer": None
             if customer
-            else {"name": (ai.customer_name if ai else "") or "", "email": email, "phone": phone, "contact_name": ai.contact_name if ai else ""},
+            else {
+                "name": (ai.customer_name if ai else "") or company,
+                "email": email,
+                "phone": phone,
+                "contact_name": (ai.contact_name if ai else "") or contact,
+            },
             "services": services,
             "unlisted_items": extra,
             "used_ai": ai is not None,
         }
+
+
+def _field(text: str, label: str) -> str:
+    m = re.search(rf"^\s*(?:{label})\s*[:：]\s*(.+?)\s*$", text, re.I | re.M)
+    return m.group(1)[:200] if m else ""
 
 
 def customer_brief(c: Customer) -> dict[str, str]:

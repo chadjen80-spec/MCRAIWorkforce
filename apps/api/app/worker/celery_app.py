@@ -49,6 +49,8 @@ celery_app.conf.update(
     worker_hijack_root_logger=False,
     beat_schedule={
         "reap-expired-leases": {"task": "mcr.reap", "schedule": 30.0, "options": {"queue": MAINTENANCE_QUEUE}},
+        "qtc-deliver-events": {"task": "mcr.qtc_deliver_events", "schedule": 15.0, "options": {"queue": MAINTENANCE_QUEUE}},
+        "qtc-scan": {"task": "mcr.qtc_scan", "schedule": 3600.0, "options": {"queue": MAINTENANCE_QUEUE}},
     },
 )
 
@@ -114,5 +116,31 @@ def reap() -> dict:
         if any(stats.values()):
             log.info("reaper recovered tasks", extra={"stats": stats})
         return stats
+    finally:
+        session.close()
+
+
+@celery_app.task(name="mcr.qtc_deliver_events")
+def qtc_deliver_events() -> dict:
+    """Send pending Quote-to-Cash events to n8n as signed webhooks (no-op until QTC_EVENTS_URL/SECRET are set)."""
+    from app.db import new_session
+    from app.qtc.events import deliver_pending
+
+    session = new_session()
+    try:
+        return deliver_pending(session)
+    finally:
+        session.close()
+
+
+@celery_app.task(name="mcr.qtc_scan")
+def qtc_scan() -> dict:
+    """Emit invoice due-soon / overdue events and the weekly receivables summary (idempotent)."""
+    from app.db import new_session
+    from app.qtc.events import scan
+
+    session = new_session()
+    try:
+        return scan(session)
     finally:
         session.close()

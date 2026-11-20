@@ -111,6 +111,9 @@ class ApiKey(Base):
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
     last_used_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    # What the key may do (see app.deps.SCOPES). NULL: a key created before scopes existed, which keeps the
+    # access it had (jobs and Quote-to-Cash reads). New keys get only the scopes they are created with.
+    scopes: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
 
 
 class Project(Base):

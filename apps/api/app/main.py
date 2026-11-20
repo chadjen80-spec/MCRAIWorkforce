@@ -17,6 +17,7 @@ from app.logging_config import configure_logging
 from app.qtc import api as qtc_api
 from app.qtc import assistant_api as qtc_assistant_api
 from app.qtc import billing_api as qtc_billing_api
+from app.qtc import dashboard as qtc_dashboard
 from app.qtc import quotation_api as qtc_quotation_api
 
 log = logging.getLogger("mcr.api")
@@ -84,6 +85,7 @@ def create_app() -> FastAPI:
     app.include_router(qtc_quotation_api.router)
     app.include_router(qtc_billing_api.router)
     app.include_router(qtc_assistant_api.router)
+    app.include_router(qtc_dashboard.router)
     return app
 
 

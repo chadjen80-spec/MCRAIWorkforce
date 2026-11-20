@@ -18,6 +18,23 @@ from app.errors import AppError, forbidden, unauthenticated
 from app.models import ApiKey, Membership, Organization, User
 from app.security import decode_access_token, hash_api_key
 
+# What an integration key may do. Signed-in people are not limited by scopes (their role applies).
+SCOPES: dict[str, str] = {
+    "jobs": "Submit and follow creative jobs (the original n8n workflow)",
+    "qtc:read": "Read Quote-to-Cash records, the dashboard and Mira's answers",
+    "qtc:intake": "Send customer inquiries to the Sales Intake Agent (read-only: nothing is created)",
+}
+# Keys created before scopes existed keep exactly the access they had.
+LEGACY_SCOPES = ("jobs", "qtc:read")
+
+
+def required_scope(path: str) -> str:
+    if path.startswith("/v1/qtc/agents/sales-intake"):
+        return "qtc:intake"
+    if path.startswith("/v1/qtc"):
+        return "qtc:read"
+    return "jobs"
+
 
 @dataclass
 class Principal:
@@ -25,6 +42,7 @@ class Principal:
     role: str
     user: User | None = None
     api_key_name: str | None = None
+    scopes: tuple[str, ...] | None = None  # API keys only
 
     @property
     def actor(self) -> str:
@@ -114,7 +132,11 @@ def get_principal(
         # Service keys (n8n, integrations) may submit and follow jobs but are never admins: approving
         # deliverables, deleting shared data and changing settings or provider keys need a signed-in
         # owner or admin, so an automation can never approve the work it submitted.
-        principal = Principal(organization=org, role="service", api_key_name=key.name)
+        scopes = tuple(key.scopes) if key.scopes is not None else LEGACY_SCOPES
+        needed = required_scope(request.url.path)
+        if needed not in scopes:
+            raise forbidden(f"This API key does not have the '{needed}' scope")
+        principal = Principal(organization=org, role="service", api_key_name=key.name, scopes=scopes)
     elif authorization and authorization.lower().startswith("bearer "):
         try:
             claims = decode_access_token(authorization[7:].strip())
