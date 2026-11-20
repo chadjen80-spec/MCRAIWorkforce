@@ -4,6 +4,7 @@
     python -m app.cli create-api-key NAME  print a new service API key once (e.g. NAME=n8n)
     python -m app.cli generate-secrets     print fresh JWT_SECRET / SECRETS_ENCRYPTION_KEY values
     python -m app.cli reap                 run the lease reaper once
+    python -m app.cli seed-qtc-demo        add example customers, services and a DRAFT price list (Quote-to-Cash)
 """
 from __future__ import annotations
 
@@ -63,6 +64,20 @@ def create_api_key(name: str) -> int:
     return 0
 
 
+def seed_qtc_demo() -> int:
+    from app.qtc.seed import seed_demo
+
+    with session_scope() as session:
+        org = session.scalar(select(Organization).order_by(Organization.created_at))
+        if org is None:
+            print("No organization yet. Run: python -m app.cli seed", file=sys.stderr)
+            return 2
+        created = seed_demo(session, org.id)
+    print(f"Example Quote-to-Cash data for '{org.name}': {created}. The example price list is a DRAFT: "
+          "an owner or admin must review and approve it before quotations can use it.")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if not argv:
         print(__doc__)
@@ -76,6 +91,8 @@ def main(argv: list[str]) -> int:
         print(f"JWT_SECRET={secrets.token_urlsafe(48)}")
         print(f"SECRETS_ENCRYPTION_KEY={Fernet.generate_key().decode()}")
         return 0
+    if cmd == "seed-qtc-demo":
+        return seed_qtc_demo()
     if cmd == "reap":
         from app.worker.celery_app import reap
 

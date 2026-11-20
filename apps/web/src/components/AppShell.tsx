@@ -17,6 +17,7 @@ const ICONS = {
   jobs: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
   deliverables: "M3 5h18v14H3zM3 15l5-5 4 4 3-3 6 6M15.5 9.5h.01",
   posters: "M6 2h12v20H6zM9 6h6M9 10h6M8.5 15.5l2-2 2 2 3-3",
+  qtc: "M4 4h16v16H4zM8 9h8M8 13h5M14.5 16.5h2M12 2v2M12 20v2",
   settings:
     "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.8 1.2V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z",
 } as const;
@@ -28,6 +29,7 @@ const NAV: { href: string; key: MessageKey; icon: keyof typeof ICONS }[] = [
   { href: "/jobs", key: "nav.jobs", icon: "jobs" },
   { href: "/posters", key: "nav.posters", icon: "posters" },
   { href: "/deliverables", key: "nav.deliverables", icon: "deliverables" },
+  { href: "/qtc", key: "nav.qtc", icon: "qtc" },
   { href: "/settings", key: "nav.settings", icon: "settings" },
 ];
 
@@ -175,7 +177,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* Mobile bottom navigation */}
       <nav
         aria-label={t("nav.main")}
-        className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-7 border-t border-line bg-surface pb-[env(safe-area-inset-bottom)] lg:hidden"
+        className="fixed inset-x-0 bottom-0 z-30 grid auto-cols-fr grid-flow-col border-t border-line bg-surface pb-[env(safe-area-inset-bottom)] lg:hidden"
       >
         {NAV.map((item) => (
           <Link

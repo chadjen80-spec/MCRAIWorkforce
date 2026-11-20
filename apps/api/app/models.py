@@ -334,3 +334,8 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(64))
     detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+
+
+# Quote-to-Cash tables live in their own module; importing it here registers them on Base.metadata for
+# Alembic and the test suite (they only reference organizations, so there is no import cycle).
+from app.qtc import models as _qtc_models  # noqa: E402, F401

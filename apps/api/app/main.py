@@ -14,6 +14,7 @@ from app.api import assets, assistant, jobs, posters, system
 from app.config import get_settings
 from app.errors import AppError
 from app.logging_config import configure_logging
+from app.qtc import api as qtc_api
 
 log = logging.getLogger("mcr.api")
 
@@ -76,6 +77,7 @@ def create_app() -> FastAPI:
     app.include_router(assets.router)
     app.include_router(assets.public_router)
     app.include_router(posters.router)
+    app.include_router(qtc_api.router)
     return app
 
 
