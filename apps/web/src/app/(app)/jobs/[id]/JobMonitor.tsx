@@ -28,6 +28,7 @@ import {
   AGENTS,
   TERMINAL_JOB_STATUSES,
   type Artifact,
+  type DashboardSummary,
   type ItemList,
   type Job,
   type JobDetail,
@@ -179,6 +180,14 @@ export function JobMonitor() {
     { interval: terminal ? 0 : POLL_MS },
   );
 
+  // Which agent queues have no worker, so the graph can say why a job is not starting. Only needed (and
+  // only fetched) while the job is still active.
+  const workers = useApi<DashboardSummary>(
+    monitor.data && ["queued", "planning", "planned", "running"].includes(monitor.data.job.status) ? "job-workers" : null,
+    (signal) => api<DashboardSummary>("/v1/dashboard/summary", { signal }),
+    { interval: 15000 },
+  );
+
   const artifacts = useApi<Artifact[]>(
     `job-artifacts:${id}`,
     async (signal) => stabilizeArtifacts((await api<ItemList<Artifact>>(`${base}/artifacts`, { signal })).items),
@@ -291,7 +300,7 @@ export function JobMonitor() {
       {/* Full width so the wide graph layout stays legible on desktop. */}
       <Card className="mb-4">
         <SectionTitle>{t("graph.title")}</SectionTitle>
-        <AgentGraph job={job} tasks={tasks} qa={qa} artifacts={artifacts.data} />
+        <AgentGraph job={job} tasks={tasks} qa={qa} artifacts={artifacts.data} offlineQueues={workers.data?.offline_queues} />
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-3">

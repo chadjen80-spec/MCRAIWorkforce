@@ -4,6 +4,7 @@ import {
   actualCost,
   aiProgress,
   approvalState,
+  blockedByOfflineQueues,
   buildGraphModel,
   fitView,
   graphBounds,
@@ -110,6 +111,26 @@ describe("layout: fit to the nodes actually drawn", () => {
     const tiny = fitView({ x: 0, y: 0, w: 10, h: 10 }, 0, 260);
     expect(tiny.w).toBe(260);
     expect(tiny.x + tiny.w / 2).toBe(5);
+  });
+});
+
+describe("blockedByOfflineQueues: why a job is not starting", () => {
+  const all = ["planner", "content", "image", "document", "video", "qa"];
+
+  it("names the planner while a queued job has no plan (the stuck-at-0% case)", () => {
+    expect(blockedByOfflineQueues(job({ status: "queued", progress: 0 }), [task("plan", "planner", { status: "queued" })], all)).toEqual(["planner"]);
+  });
+
+  it("names only the queues of tasks still waiting", () => {
+    const running = [task("plan", "planner", { status: "succeeded" }), task("img_1", "image", { status: "succeeded" }), task("doc", "document", { status: "queued" }), task("qa_review", "qa")];
+    expect(blockedByOfflineQueues(job({ status: "running" }), running, all).sort()).toEqual(["document", "qa"]);
+    expect(blockedByOfflineQueues(job({ status: "running" }), running, ["video"])).toEqual([]);
+  });
+
+  it("stays quiet when workers are online or the job has finished", () => {
+    expect(blockedByOfflineQueues(job({ status: "queued" }), [], [])).toEqual([]);
+    expect(blockedByOfflineQueues(job({ status: "queued" }), [], undefined)).toEqual([]);
+    expect(blockedByOfflineQueues(job({ status: "awaiting_approval" }), campaign, all)).toEqual([]);
   });
 });
 

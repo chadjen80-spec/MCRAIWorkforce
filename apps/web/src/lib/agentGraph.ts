@@ -246,6 +246,22 @@ export function fitView(bounds: Box, pad = 28, min = 260): Box {
   return { x: bounds.x + bounds.w / 2 - w / 2, y: bounds.y + bounds.h / 2 - h / 2, w, h };
 }
 
+const ACTIVE_JOB: readonly Job["status"][] = ["queued", "planning", "planned", "running"];
+
+/**
+ * The offline agent queues this job is waiting on: the queue of every task that still has to run, plus the
+ * planner while the plan does not exist yet. Empty when the job is finished or nothing it needs is offline.
+ * `offline` comes from the dashboard summary (worker heartbeats).
+ */
+export function blockedByOfflineQueues(job: Job, tasks: readonly Task[], offline: readonly string[] | undefined): string[] {
+  if (!offline?.length || !ACTIVE_JOB.includes(job.status)) return [];
+  const needed = new Set<string>();
+  const waiting = tasks.filter((t) => t.status === "pending" || t.status === "queued");
+  for (const t of waiting) needed.add(t.agent);
+  if (!tasks.some((t) => t.agent !== "planner") && (job.status === "queued" || job.status === "planning")) needed.add("planner");
+  return [...needed].filter((q) => offline.includes(q));
+}
+
 /** Seconds a task ran (or has been running), from real timestamps; null when it has not started. */
 export function taskSeconds(task: Pick<Task, "started_at" | "finished_at">, now: number): number | null {
   if (!task.started_at) return null;

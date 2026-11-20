@@ -940,7 +940,7 @@ export default function AssistantPage() {
               </div>
             )}
             {job ? (
-              <AgentGraph job={job} tasks={monitor.data?.tasks ?? []} fill={fullScreen} qa={monitor.data?.qa} artifacts={monitor.data?.artifacts} />
+              <AgentGraph job={job} tasks={monitor.data?.tasks ?? []} fill={fullScreen} qa={monitor.data?.qa} artifacts={monitor.data?.artifacts} offlineQueues={s?.offline_queues} />
             ) : (
               <div className="flex h-64 items-center justify-center rounded-xl border border-line bg-[#050912] text-sm text-dim">{t("common.loading")}</div>
             )}

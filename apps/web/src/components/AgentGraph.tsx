@@ -8,6 +8,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import {
   NARROW,
   WIDE,
+  blockedByOfflineQueues,
   buildGraphModel,
   fitView,
   graphBounds,
@@ -384,10 +385,13 @@ export function AgentGraph({
   fill = false,
   qa,
   artifacts,
+  offlineQueues,
 }: {
   job: Job;
   tasks: Task[];
   fill?: boolean;
+  /** Agent queues with no live worker (dashboard summary), to explain a job that cannot start. */
+  offlineQueues?: readonly string[];
   /** The job's QA report, when the page already has it (verdict explanation and checks). */
   qa?: QaReport | null;
   /** The job's files, when the page already has them (shown per task in the details panel). */
@@ -508,9 +512,18 @@ export function AgentGraph({
     ["failed", t("graph.legend.failed")],
   ];
   const qaVerdict = qa?.verdict ?? job.qa_verdict;
+  const blocked = blockedByOfflineQueues(job, tasks, offlineQueues);
 
   return (
     <div ref={wrap} className={cx(fill && "flex min-h-0 flex-1 flex-col")}>
+      {blocked.length > 0 && (
+        <div role="alert" className="mb-2 rounded-lg border border-warn/60 bg-warn/10 px-3 py-2 text-sm text-ink">
+          <p className="font-semibold text-warn">
+            {t("graph.offline.title", { queues: blocked.map((q) => tx("agent", q)).join(", ") })}
+          </p>
+          <p className="mt-0.5 text-xs leading-relaxed">{t("graph.offline.hint")}</p>
+        </div>
+      )}
       <ProgressStrip job={job} tasks={tasks} />
       <div className={cx("relative overflow-hidden rounded-xl border border-line bg-[#050912]", fill && "min-h-[240px] flex-1")}>
         <svg

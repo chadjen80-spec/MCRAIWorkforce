@@ -128,6 +128,29 @@ describe("AgentGraph V2: status rendering", () => {
   });
 });
 
+describe("AgentGraph: offline workers", () => {
+  const stuck = job({ status: "queued", progress: 0, approval_status: null, qa_verdict: null, finished_at: null });
+  const planOnly = [task("plan", "planner", { status: "queued" })];
+  const drawStuck = (offline?: string[]) =>
+    render(
+      <I18nProvider>
+        <AgentGraph job={stuck} tasks={planOnly} offlineQueues={offline} />
+      </I18nProvider>,
+    );
+
+  it("explains why a queued job is not starting and how to fix it", () => {
+    drawStuck(["planner", "content", "image", "document", "video", "qa"]);
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain(th["graph.offline.title"].replace("{queues}", th["agent.planner"]));
+    expect(alert.textContent).toContain("run-worker.ps1");
+  });
+
+  it("shows nothing when the workers are running", () => {
+    drawStuck([]);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
 describe("AgentGraph V2: view controls", () => {
   it("zooms in, fits back to the nodes and resets the selection", () => {
     draw();
