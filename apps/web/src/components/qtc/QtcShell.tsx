@@ -8,10 +8,11 @@ import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/dictionaries";
 import type { ApiError } from "@/lib/api";
 
-// Only sections that exist are linked; later phases (quotations, orders, invoices, payments) are added
+// Only sections that exist are linked; later phases (orders, invoices, payments) are added
 // here as they are built.
 const TABS: { href: string; key: MessageKey }[] = [
   { href: "/qtc", key: "qtc.tab.overview" },
+  { href: "/qtc/quotations", key: "qtc.tab.quotations" },
   { href: "/qtc/customers", key: "qtc.tab.customers" },
   { href: "/qtc/services", key: "qtc.tab.services" },
 ];

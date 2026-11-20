@@ -132,3 +132,100 @@ export function parseAmountInput(raw: string): string | null {
   const v = raw.replace(/[,\s฿]/g, "");
   return /^\d+(\.\d{1,4})?$/.test(v) ? v : null;
 }
+
+// ---- quotations (Phase B) ------------------------------------------------------------------------
+export type QuotationStatus = "draft" | "pending_approval" | "approved" | "sent" | "accepted" | "declined" | "cancelled" | "expired";
+
+export interface QuotationLine {
+  position: number;
+  service_id: string | null;
+  description: string;
+  unit: string;
+  quantity: string;
+  unit_price: string | null;
+  price_source: "price_list" | "manual" | "missing";
+  discount_percent: string;
+  discount_amount: string;
+  vat_exempt: boolean;
+  line_net: string;
+  line_vat: string;
+  line_total: string;
+}
+
+export interface Quotation {
+  id: string;
+  number: string;
+  revision: number;
+  status: QuotationStatus;
+  customer: { id: string; code: string; name: string };
+  contact_id: string | null;
+  price_list_id: string;
+  title: string;
+  brief: string;
+  prices_include_vat: boolean;
+  vat_rate: string;
+  issue_date: string;
+  valid_until: string;
+  notes: string;
+  terms: string;
+  subtotal: string;
+  discount_total: string;
+  vat_total: string;
+  grand_total: string;
+  amount_in_words: string;
+  missing_prices: number;
+  created_by: string;
+  approved_by: string | null;
+  approved_at: string | null;
+  sent_at: string | null;
+  sent_method: string | null;
+  accepted_at: string | null;
+  accepted_revision: number | null;
+  acceptance: Record<string, string | null> | null;
+  lines: QuotationLine[];
+  matched: { service_id: string; code: string; name: string; matched: string }[];
+}
+
+/** One editable line in the quotation form (strings as typed; validated with parseAmountInput). */
+export interface LineDraft {
+  key: string;
+  service_id: string | null;
+  description: string;
+  unit: string;
+  quantity: string;
+  unit_price: string;
+  discount_percent: string;
+}
+
+/** Request body for lines: empty price -> null (the approved price list prices it, or a person must). */
+export function linesBody(lines: LineDraft[]): Record<string, unknown>[] {
+  return lines.map((l) => ({
+    service_id: l.service_id,
+    description: l.description.trim(),
+    unit: l.unit.trim(),
+    quantity: parseQuantity(l.quantity) ?? "1",
+    unit_price: l.unit_price.trim() === "" ? null : parseAmountInput(l.unit_price),
+    discount_percent: parseQuantity(l.discount_percent) ?? "0",
+  }));
+}
+
+export function parseQuantity(raw: string): string | null {
+  const v = raw.replace(/[,\s]/g, "");
+  return /^\d+(\.\d{1,3})?$/.test(v) && !/^0+(\.0+)?$/.test(v) ? v : v === "0" ? "0" : null;
+}
+
+/** "10.000" -> "10", "1.500" -> "1.5", "10" stays "10" (only the decimal part is trimmed). */
+export function trimZeros(v: string): string {
+  return v.includes(".") ? v.replace(/0+$/, "").replace(/\.$/, "") : v;
+}
+
+export const lineFromQuotation = (l: QuotationLine): LineDraft => ({
+  key: `${l.position}-${l.service_id ?? l.description}`,
+  service_id: l.service_id,
+  description: l.description,
+  unit: l.unit,
+  quantity: trimZeros(l.quantity),
+  // keep a price only when a person typed it; a price-list price is looked up again on save
+  unit_price: l.price_source === "manual" && l.unit_price ? formatAmount(l.unit_price).replace(/,/g, "") : "",
+  discount_percent: trimZeros(l.discount_percent),
+});

@@ -317,3 +317,208 @@ class AuditEventOut(BaseModel):
 
 class AuditEventList(Page):
     items: list[AuditEventOut]
+
+
+# ---- seller settings (Phase B) ---------------------------------------------------------------
+class SettingsIn(_CustomerFields):
+    legal_name: str = Field(default="", max_length=300)
+    tax_id: str | None = None
+    branch: str = "00000"
+    address: str = Field(default="", max_length=2000)
+    phone: str = Field(default="", max_length=40)
+    email: str = Field(default="", max_length=320)
+    quotation_terms: str = Field(default="", max_length=4000)
+    default_valid_days: int = Field(default=30, ge=1, le=365)
+
+
+class SettingsOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    legal_name: str
+    tax_id: str | None
+    branch: str
+    address: str
+    phone: str
+    email: str
+    quotation_terms: str
+    default_valid_days: int
+
+
+# ---- quotations (Phase B) ----------------------------------------------------------------------
+def _decimal_field(v: object, field: str, *, places: int, minimum: Decimal | None = None, maximum: Decimal | None = None) -> Decimal:
+    d = _money_in(v, field)
+    if d.as_tuple().exponent < -places:  # type: ignore[operator]
+        raise ValueError(f"{field} has at most {places} decimal places")
+    if minimum is not None and d < minimum:
+        raise ValueError(f"{field} must be at least {minimum}")
+    if maximum is not None and d > maximum:
+        raise ValueError(f"{field} must be at most {maximum}")
+    return d
+
+
+class QuotationLineIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    service_id: uuid.UUID | None = None
+    description: str = Field(default="", max_length=2000)
+    unit: str = Field(default="", max_length=40)
+    quantity: Decimal = Decimal("1")
+    unit_price: Decimal | None = None  # leave empty to use the approved price list (or to leave it for a person)
+    discount_percent: Decimal = Decimal("0")
+    discount_amount: Decimal = Decimal("0")
+    vat_exempt: bool | None = None
+
+    @field_validator("quantity", mode="before")
+    @classmethod
+    def _qty(cls, v: object) -> Decimal:
+        d = _decimal_field(v, "quantity", places=3)
+        if d <= 0:
+            raise ValueError("quantity must be greater than zero")
+        return d
+
+    @field_validator("unit_price", mode="before")
+    @classmethod
+    def _price(cls, v: object) -> Decimal | None:
+        if v is None or v == "":
+            return None
+        return _decimal_field(v, "unit_price", places=4, minimum=Decimal("0")).quantize(Decimal("0.0001"))  # stored precision
+
+    @field_validator("discount_percent", mode="before")
+    @classmethod
+    def _pct(cls, v: object) -> Decimal:
+        return _decimal_field(v, "discount_percent", places=4, minimum=Decimal("0"), maximum=Decimal("100"))
+
+    @field_validator("discount_amount", mode="before")
+    @classmethod
+    def _amt(cls, v: object) -> Decimal:
+        return _decimal_field(v, "discount_amount", places=2, minimum=Decimal("0"))
+
+
+class QuotationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    customer_id: uuid.UUID
+    contact_id: uuid.UUID | None = None
+    price_list_id: uuid.UUID | None = None  # default: the approved default price list
+    title: str = Field(default="", max_length=200)
+    brief: str = Field(default="", max_length=4000)
+    lines: list[QuotationLineIn] | None = Field(default=None, max_length=100)
+    match_brief: bool = True  # with no lines: one line per catalogue service named in the brief
+    valid_until: date | None = None
+    notes: str = Field(default="", max_length=4000)
+    terms: str | None = Field(default=None, max_length=4000)
+
+
+class QuotationPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    contact_id: uuid.UUID | None = None
+    title: str | None = Field(default=None, max_length=200)
+    lines: list[QuotationLineIn] | None = Field(default=None, max_length=100)
+    valid_until: date | None = None
+    notes: str | None = Field(default=None, max_length=4000)
+    terms: str | None = Field(default=None, max_length=4000)
+
+
+class ApproveIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decision: Literal["approved", "changes_requested"]
+    comment: str = Field(default="", max_length=2000)
+
+
+class SendIn(BaseModel):
+    """Records that the approved quotation was given to the customer. The system itself sends nothing."""
+
+    model_config = ConfigDict(extra="forbid")
+    method: Literal["email_by_user", "line_by_user", "in_person", "printed", "other"]
+    note: str = Field(default="", max_length=1000)
+
+
+class AcceptIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    accepted_by_name: str = Field(min_length=1, max_length=200)
+    method: Literal["signed_document", "purchase_order", "email", "line", "verbal", "other"]
+    reference: str = Field(default="", max_length=200)  # PO number, email subject, …
+    note: str = Field(default="", max_length=2000)
+    evidence_url: str | None = Field(default=None, max_length=1000)  # where the signed copy / PO is kept
+    revision: int | None = None  # the revision the customer accepted (must be the current one)
+
+
+class DeclineIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(default="", max_length=2000)
+
+
+class ReviseIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class QuotationLineOut(BaseModel):
+    position: int
+    service_id: uuid.UUID | None
+    description: str
+    unit: str
+    quantity: DecimalStr
+    unit_price: DecimalStr | None
+    price_source: str
+    discount_percent: DecimalStr
+    discount_amount: DecimalStr
+    vat_exempt: bool
+    line_net: DecimalStr
+    line_vat: DecimalStr
+    line_total: DecimalStr
+
+
+class QuotationOut(BaseModel):
+    id: uuid.UUID
+    number: str
+    revision: int
+    status: str  # includes the computed "expired"
+    customer: dict
+    contact_id: uuid.UUID | None
+    price_list_id: uuid.UUID
+    title: str
+    brief: str
+    currency: str
+    prices_include_vat: bool
+    vat_rate: DecimalStr
+    issue_date: date
+    valid_until: date
+    notes: str
+    terms: str
+    subtotal: DecimalStr
+    discount_total: DecimalStr
+    vat_total: DecimalStr
+    grand_total: DecimalStr
+    amount_in_words: str
+    missing_prices: int
+    created_by: str
+    submitted_by: str | None
+    approved_by: str | None
+    approved_at: datetime | None
+    sent_at: datetime | None
+    sent_method: str | None
+    accepted_at: datetime | None
+    accepted_revision: int | None
+    acceptance: dict | None
+    created_at: datetime
+    updated_at: datetime
+    lines: list[QuotationLineOut] = Field(default_factory=list)
+    matched: list[dict] = Field(default_factory=list)  # services found in the brief (on creation)
+
+
+class QuotationList(Page):
+    items: list[QuotationOut]
+
+
+class RevisionOut(BaseModel):
+    revision: int
+    grand_total: DecimalStr
+    reason: str
+    created_by: str
+    created_at: datetime
+
+
+class ApprovalOut(BaseModel):
+    revision: int
+    decision: str
+    comment: str
+    decided_by: str
+    decided_at: datetime

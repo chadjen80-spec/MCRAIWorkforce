@@ -190,3 +190,141 @@ class QtcAuditEvent(Base):
     actor: Mapped[str] = mapped_column(String(320))
     detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
+
+
+# ---- Phase B: quotations ------------------------------------------------------------------
+class QtcSettings(Base):
+    """The seller's details printed on commercial documents, and Quote-to-Cash defaults (one row per org)."""
+
+    __tablename__ = "qtc_settings"
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True)
+    legal_name: Mapped[str] = mapped_column(String(300), default="")
+    tax_id: Mapped[str | None] = mapped_column(String(13), nullable=True)
+    branch: Mapped[str] = mapped_column(String(5), default="00000")
+    address: Mapped[str] = mapped_column(Text, default="")
+    phone: Mapped[str] = mapped_column(String(40), default="")
+    email: Mapped[str] = mapped_column(String(320), default="")
+    quotation_terms: Mapped[str] = mapped_column(Text, default="")
+    default_valid_days: Mapped[int] = mapped_column(default=30)
+    updated_by: Mapped[str] = mapped_column(String(320), default="")
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, onupdate=utcnow)
+
+
+class QuotationStatus:
+    DRAFT = "draft"
+    PENDING_APPROVAL = "pending_approval"
+    APPROVED = "approved"
+    SENT = "sent"
+    ACCEPTED = "accepted"
+    DECLINED = "declined"
+    CANCELLED = "cancelled"
+    ALL = frozenset({DRAFT, PENDING_APPROVAL, APPROVED, SENT, ACCEPTED, DECLINED, CANCELLED})
+    # "expired" is not stored: an approved or sent quotation past valid_until is reported as expired.
+
+
+_STATUS_CHECK = "status IN ('draft', 'pending_approval', 'approved', 'sent', 'accepted', 'declined', 'cancelled')"
+
+
+class Quotation(Base):
+    __tablename__ = "quotations"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "number", name="uq_quotation_org_number"),
+        UniqueConstraint("organization_id", "idempotency_key", name="uq_quotation_org_idempotency"),
+        CheckConstraint(_STATUS_CHECK, name="ck_quotation_status"),
+        CheckConstraint("subtotal >= 0 AND vat_total >= 0 AND grand_total >= 0 AND discount_total >= 0", name="ck_quotation_totals"),
+        Index("ix_quotations_org_status", "organization_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
+    number: Mapped[str] = mapped_column(String(32))
+    revision: Mapped[int] = mapped_column(default=1)
+    customer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("customers.id", ondelete="RESTRICT"), index=True)
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("customer_contacts.id", ondelete="SET NULL"), nullable=True)
+    price_list_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("price_lists.id", ondelete="RESTRICT"))
+    title: Mapped[str] = mapped_column(String(200), default="")
+    brief: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(20), default=QuotationStatus.DRAFT)
+    currency: Mapped[str] = mapped_column(String(3), default="THB")
+    prices_include_vat: Mapped[bool] = mapped_column(Boolean, default=False)
+    vat_rate: Mapped[Decimal] = mapped_column(Rate, default=Decimal("0.0700"))
+    issue_date: Mapped[date] = mapped_column(Date)
+    valid_until: Mapped[date] = mapped_column(Date)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    terms: Mapped[str] = mapped_column(Text, default="")
+    subtotal: Mapped[Decimal] = mapped_column(Amount, default=Decimal("0"))
+    discount_total: Mapped[Decimal] = mapped_column(Amount, default=Decimal("0"))
+    vat_total: Mapped[Decimal] = mapped_column(Amount, default=Decimal("0"))
+    grand_total: Mapped[Decimal] = mapped_column(Amount, default=Decimal("0"))
+    created_by: Mapped[str] = mapped_column(String(320), default="")
+    submitted_by: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    sent_by: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    sent_method: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    accepted_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    accepted_revision: Mapped[int | None] = mapped_column(nullable=True)
+    acceptance: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)  # who, how, reference, evidence
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, onupdate=utcnow)
+
+
+class QuotationLine(Base):
+    __tablename__ = "quotation_lines"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_quotation_line_quantity"),
+        CheckConstraint("unit_price IS NULL OR unit_price >= 0", name="ck_quotation_line_price"),
+        CheckConstraint("discount_percent >= 0 AND discount_percent <= 100 AND discount_amount >= 0", name="ck_quotation_line_discount"),
+        CheckConstraint("price_source IN ('price_list', 'manual', 'missing')", name="ck_quotation_line_source"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
+    quotation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("quotations.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(default=1)
+    service_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("service_catalog.id", ondelete="SET NULL"), nullable=True)
+    description: Mapped[str] = mapped_column(Text)
+    unit: Mapped[str] = mapped_column(String(40), default="งาน")
+    quantity: Mapped[Decimal] = mapped_column(Quantity, default=Decimal("1"))
+    unit_price: Mapped[Decimal | None] = mapped_column(Price, nullable=True)  # NULL: a person must enter it
+    price_source: Mapped[str] = mapped_column(String(16), default="missing")
+    discount_percent: Mapped[Decimal] = mapped_column(Rate, default=Decimal("0"))
+    discount_amount: Mapped[Decimal] = mapped_column(Amount, default=Decimal("0"))
+    vat_exempt: Mapped[bool] = mapped_column(Boolean, default=False)
+    line_net: Mapped[Decimal] = mapped_column(Amount, default=Decimal("0"))
+    line_vat: Mapped[Decimal] = mapped_column(Amount, default=Decimal("0"))
+    line_total: Mapped[Decimal] = mapped_column(Amount, default=Decimal("0"))
+
+
+class QuotationRevision(Base):
+    """Frozen copy of a quotation as submitted: what was approved, sent and accepted is never edited later."""
+
+    __tablename__ = "quotation_revisions"
+    __table_args__ = (UniqueConstraint("quotation_id", "revision", name="uq_quotation_revision"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
+    quotation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("quotations.id", ondelete="CASCADE"), index=True)
+    revision: Mapped[int] = mapped_column()
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON)
+    grand_total: Mapped[Decimal] = mapped_column(Amount)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str] = mapped_column(String(320))
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+
+
+class QuotationApproval(Base):
+    __tablename__ = "quotation_approvals"
+    __table_args__ = (CheckConstraint("decision IN ('approved', 'changes_requested')", name="ck_quotation_approval_decision"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
+    quotation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("quotations.id", ondelete="CASCADE"), index=True)
+    revision: Mapped[int] = mapped_column()
+    decision: Mapped[str] = mapped_column(String(20))
+    comment: Mapped[str] = mapped_column(Text, default="")
+    decided_by: Mapped[str] = mapped_column(String(320))
+    decided_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)

@@ -5,11 +5,12 @@ import { QtcError, QtcShell } from "@/components/qtc/QtcShell";
 import { Badge, Card, LoadingBlock } from "@/components/ui";
 import { useI18n } from "@/i18n/I18nProvider";
 import { api } from "@/lib/api";
-import { formatRate, type Customer, type Page, type PriceList, type Service } from "@/lib/qtc";
+import { formatRate, type Customer, type Page, type PriceList, type Quotation, type Service } from "@/lib/qtc";
 import { useApi } from "@/lib/useApi";
 
 interface Overview {
   customers: number;
+  quotesWaiting: number;
   services: number;
   priceList: PriceList | null;
 }
@@ -17,15 +18,16 @@ interface Overview {
 export default function QtcOverviewPage() {
   const { t, dateTime } = useI18n();
   const data = useApi<Overview>("qtc:overview", async (signal) => {
-    const [customers, services, lists] = await Promise.all([
+    const [customers, services, lists, waiting] = await Promise.all([
       api<Page<Customer>>("/v1/qtc/customers", { query: { limit: 1 }, signal }),
       api<Page<Service>>("/v1/qtc/services", { query: { limit: 1 }, signal }),
       api<Page<PriceList>>("/v1/qtc/price-lists", { query: { status: "active", limit: 20 }, signal }),
+      api<Page<Quotation>>("/v1/qtc/quotations", { query: { status: "pending_approval", limit: 1 }, signal }),
     ]);
-    return { customers: customers.total, services: services.total, priceList: lists.items.find((p) => p.is_default) ?? lists.items[0] ?? null };
+    return { customers: customers.total, quotesWaiting: waiting.total, services: services.total, priceList: lists.items.find((p) => p.is_default) ?? lists.items[0] ?? null };
   });
   const d = data.data;
-  const planned = ["qtc.overview.quotes", "qtc.overview.orders", "qtc.overview.invoices", "qtc.overview.dashboard"] as const;
+  const planned = ["qtc.overview.orders", "qtc.overview.invoices", "qtc.overview.dashboard"] as const;
 
   return (
     <QtcShell>
@@ -35,7 +37,11 @@ export default function QtcOverviewPage() {
         <LoadingBlock />
       ) : (
         <div className="space-y-6">
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <Link href="/qtc/quotations" className={`rounded-2xl border bg-surface p-4 transition hover:border-brand-soft/60 ${d.quotesWaiting ? "border-warn/60" : "border-line"}`}>
+              <p className={`text-3xl font-bold tabular-nums ${d.quotesWaiting ? "text-warn" : "text-ink"}`}>{d.quotesWaiting}</p>
+              <p className="text-sm text-dim">{t("qtc.overview.quotesWaiting")}</p>
+            </Link>
             <Link href="/qtc/customers" className="rounded-2xl border border-line bg-surface p-4 transition hover:border-brand-soft/60">
               <p className="text-3xl font-bold tabular-nums text-ink">{d.customers}</p>
               <p className="text-sm text-dim">{t("qtc.overview.customers")}</p>
