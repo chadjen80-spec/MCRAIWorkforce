@@ -260,6 +260,12 @@ def test_mira_reports_refusals_and_waiting_honestly(cafe, client, auth):
     client.post("/v1/cafe/assistant/confirm", json=help_["confirm"], headers=auth)
     assert client.get("/v1/cafe/assist", headers=auth).json()["items"][0]["source"] == "mira"
     assert unknown["data"]["app"] == "Minecraft"
+    # speech heard "สตรีม" (stream) for "สตีม" (Steam): one-letter slips still find the app, and Mira asks first
+    misheard = client.post("/v1/cafe/assistant", json={"text": "เปิดสตรีมที่เครื่อง 12"}, headers=auth).json()
+    assert misheard["intent"] == "launch_app" and misheard["confirm"]["payload"]["app_key"] == "steam"
+    # "open X at seat 12" with an unknown X is still a launch request (not a creative job), answered honestly
+    odd = client.post("/v1/cafe/assistant", json={"text": "เปิดโปรแกรมแต่งรูปที่เครื่อง 12"}, headers=auth).json()
+    assert odd["intent"] == "launch_app" and odd["confirm"] is None and odd["data"]["error"] == "APP_NOT_IN_CATALOG"
     # creative and sales requests, and requests for a café page, are not café commands
     for text in ("เปิดงานโปสเตอร์โปรโมชันใหม่", "สร้างใบเสนอราคาให้ลูกค้า ABC", "เปิดหน้าร้านเกม", "open the games page", "เปิดหน้าคลังเกม"):
         assert client.post("/v1/cafe/assistant", json={"text": text}, headers=auth).json()["intent"] is None

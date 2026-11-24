@@ -136,5 +136,7 @@ const CAFE_PAGES: { page: CafePage; words: string[] }[] = [
 ];
 
 export function cafePageFor(text: string): CafePage | null {
-  return pageFor(text, CAFE_PAGES);
+  // Common spellings and speech-to-text variants: "เกมส์" for "เกม", "คาเฟ" without the tone mark.
+  const spoken = text.replace(/เกมส์/g, "เกม").replace(/คาเฟ(?!่)/g, "คาเฟ่");
+  return pageFor(spoken, CAFE_PAGES);
 }

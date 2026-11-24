@@ -96,16 +96,45 @@ def _norm(text: str) -> str:
     return re.sub(r"[\s\-_.:]+", "", text.lower())
 
 
+def _within_one_edit(a: str, b: str) -> bool:
+    """True when a and b differ by at most one inserted, deleted or changed character."""
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) > len(b):
+        a, b = b, a
+    i = j = edits = 0
+    while i < len(a) and j < len(b):
+        if a[i] == b[j]:
+            i += 1
+            j += 1
+            continue
+        edits += 1
+        if edits > 1:
+            return False
+        if len(a) == len(b):
+            i += 1
+        j += 1
+    return edits + (len(b) - j) <= 1
+
+
+def _fuzzy_in(name: str, text: str) -> bool:
+    """`name` appears in `text` with at most one wrong character, e.g. speech heard "สตรีม" for "สตีม" (Steam)."""
+    if len(name) < 4:  # short names must match exactly, or almost anything would match
+        return False
+    return any(_within_one_edit(name, text[i:i + size]) for size in (len(name) - 1, len(name), len(name) + 1)
+               for i in range(0, max(0, len(text) - size) + 1))
+
+
 def match_app(text: str, apps: list[CafeApp]) -> CafeApp | None:
-    """The catalogue app whose name or alias appears in the text (longest name wins)."""
+    """The catalogue app whose name or alias appears in the text (longest name wins); then a one-letter slip is allowed.
+    A near match is safe here because a launch always needs a yes ("Open Steam on seat 12?")."""
     t = _norm(text)
-    best: tuple[int, CafeApp] | None = None
-    for a in apps:
-        for name in [a.name, a.app_key, *(a.aliases or [])]:
-            n = _norm(name)
-            if len(n) >= 2 and n in t and (best is None or len(n) > best[0]):
-                best = (len(n), a)
-    return best[1] if best else None
+    names = [(_norm(n), a) for a in apps for n in [a.name, a.app_key, *(a.aliases or [])]]
+    exact = [(len(n), a) for n, a in names if len(n) >= 2 and n in t]
+    if exact:
+        return max(exact, key=lambda x: x[0])[1]
+    near = [(len(n), a) for n, a in names if _fuzzy_in(n, t)]
+    return max(near, key=lambda x: x[0])[1] if near else None
 
 
 def plan_rules(text: str, apps: list[CafeApp]) -> ToolCall | None:
@@ -118,8 +147,9 @@ def plan_rules(text: str, apps: list[CafeApp]) -> ToolCall | None:
         app = match_app(text, apps)
         if app is not None:
             return ToolCall("launch_app", {**args, "app": app.name})
-        # "เปิดเกม X" with an X we do not have: say so instead of guessing. A page request is not a launch.
-        if GAME_WORD.search(text) and not PAGE_WORD.search(text):
+        # "เปิดเกม X" or "เปิด X ที่เครื่อง 12" with an X we do not have: say so instead of guessing (rather than letting
+        # it become a creative job). A page request is not a launch.
+        if (GAME_WORD.search(text) or seat) and not PAGE_WORD.search(text):
             spoken = SEAT_RE.sub("", LAUNCH_VERB.sub("", text))
             spoken = re.sub(r"เกม|โปรแกรม|ให้หน่อย|หน่อย|ให้|อยาก|ขอ|ครับ|ค่ะ|คะ|นะ|ที่|please|\bgame\b|\bthe\b", "", spoken, flags=re.I)
             spoken = re.sub(r"\s+", " ", spoken).strip(" ,.!?")

@@ -167,6 +167,10 @@ describe("cafePageFor: saying a Smart Café page name opens that page", () => {
     ["รายงานร้านเกม", "/cafe/reports"],
     ["ตั้งค่าร้านเกม", "/cafe/settings"],
     ["cafe settings", "/cafe/settings"],
+    // spellings that speech-to-text produces
+    ["เปิดหน้าร้านเกมส์", "/cafe"],
+    ["เปิดคาเฟ", "/cafe"],
+    ["คลังเกมส์", "/cafe/games"],
   ];
   it.each(cases)("%s -> %s", (text, path) => {
     expect(cafePageFor(text)?.path).toBe(path);
