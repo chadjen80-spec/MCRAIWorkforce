@@ -29,6 +29,13 @@ x-api-env: &api-env
   # Signed Quote-to-Cash events to n8n (nothing is delivered while QTC_EVENTS_SECRET is empty)
   QTC_EVENTS_URL: ${QTC_EVENTS_URL:-http://n8n:5678/webhook/mcr-qtc}
   QTC_EVENTS_SECRET: ${QTC_EVENTS_SECRET:-}
+  # MCR Smart Café: off unless CAFE_ENABLED=true. In Docker set CAFE_COMMAND_SIGNING_KEY even for development:
+  # without it the API generates a key inside the container, which changes when the container is recreated and
+  # then every enrolled seat PC rejects new commands (they pin the key at enrolment).
+  CAFE_ENABLED: ${CAFE_ENABLED:-false}
+  CAFE_MODULES: ${CAFE_MODULES:-devices,sessions,launcher,assistant,assist}
+  CAFE_COMMAND_SIGNING_KEY: ${CAFE_COMMAND_SIGNING_KEY:-}
+  CAFE_DEVICE_JWT_SECRET: ${CAFE_DEVICE_JWT_SECRET:-}
   BOOTSTRAP_ORG_NAME: ${BOOTSTRAP_ORG_NAME:-MCR Technology}
   BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
   BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
@@ -155,6 +162,9 @@ services:
     build:
       context: .
       dockerfile: infrastructure/docker/web.Dockerfile
+      args:
+        # Built into the web bundle: change it, then rebuild the image (docker compose up -d --build web).
+        NEXT_PUBLIC_CAFE_ENABLED: ${NEXT_PUBLIC_CAFE_ENABLED:-0}
     image: mcr-ai-workforce-web:${APP_VERSION:-dev}
     restart: unless-stopped
     environment:
