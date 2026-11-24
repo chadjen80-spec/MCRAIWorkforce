@@ -68,6 +68,21 @@ class Settings(BaseSettings):
     qtc_events_url: str = ""
     qtc_events_secret: str = ""  # HMAC-SHA256 key, at least 32 characters; n8n reads the same value from its env
     qtc_due_soon_days: int = 3
+    # --- MCR Smart Café (internet café / gaming centre) -------------------------
+    # Off by default: every /v1/cafe route answers 404 FEATURE_DISABLED and Mira ignores café commands.
+    cafe_enabled: bool = False
+    # Modules switched on when cafe_enabled. Unfinished ones (orders, pos, members, printing, reports) stay off.
+    cafe_modules: str = "devices,sessions,launcher,assistant,assist"
+    # ECDSA P-256 private key (PEM) that signs seat commands. Required in production; development generates
+    # DATA_DIR/cafe_command_signing_key.pem once.
+    cafe_command_signing_key: str = ""
+    # Separate secret for device tokens; blank derives one from JWT_SECRET with a distinct label.
+    cafe_device_jwt_secret: str = ""
+    cafe_device_token_minutes: int = 15
+    cafe_device_online_seconds: int = 30
+    cafe_command_ttl_seconds: int = 60
+    cafe_launch_wait_seconds: float = 8
+    cafe_enrollment_code_minutes: int = 15
     default_job_budget_usd: Decimal = Decimal("5")
     default_monthly_budget_usd: Decimal = Decimal("50")
 
@@ -168,9 +183,17 @@ class Settings(BaseSettings):
                 problems.append("CELERY_BROKER_URL must point to Redis")
             if self.celery_task_always_eager:
                 problems.append("CELERY_TASK_ALWAYS_EAGER must be false")
+            if self.cafe_enabled and not self.cafe_command_signing_key:
+                problems.append("CAFE_COMMAND_SIGNING_KEY is required when CAFE_ENABLED is true")
             if problems:
                 raise ValueError("Unsafe production configuration: " + "; ".join(problems))
         return self
+
+    @property
+    def cafe_module_set(self) -> frozenset[str]:
+        if not self.cafe_enabled:
+            return frozenset()
+        return frozenset(m.strip() for m in self.cafe_modules.split(",") if m.strip())
 
     @property
     def is_sqlite(self) -> bool:

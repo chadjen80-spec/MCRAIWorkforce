@@ -50,6 +50,7 @@ import type {
 } from "@/lib/types";
 import { POSTER_WORDS, confirmAction, posterIntent, qtcPageFor } from "@/lib/intent";
 import { askQtc, confirmQtc, qtcDecision, type QtcAnswer } from "@/lib/qtcAssistant";
+import { askCafe, confirmCafe } from "@/lib/cafeAssistant";
 import { useApi } from "@/lib/useApi";
 import { VoiceError, canListen, listenOnce, speak } from "@/lib/voice";
 import { isFirstRun, workflowById, type Workflow, type WorkflowId } from "@/lib/workflows";
@@ -285,7 +286,10 @@ export default function AssistantPage() {
     setQtcRunning(true);
     setMode("thinking");
     try {
-      const done = await confirmQtc(item.answer.confirm, locale, item.key);
+      const done =
+        item.answer.source === "cafe"
+          ? await confirmCafe(item.answer.confirm, locale, item.key)
+          : await confirmQtc(item.answer.confirm, locale, item.key);
       setQtc({ answer: done, waiting: false, key: item.key });
       await say(done.reply, signal);
     } catch (err) {
@@ -335,6 +339,10 @@ export default function AssistantPage() {
     if (text.length < 5) return say(t("assistant.tooShort"), signal);
     setQtc(null);
     setMode("thinking");
+    // Café commands (launch an app, remaining time, call staff) are asked first: they answer null when the café is off.
+    const cafe = await askCafe(text, locale, signal);
+    if (signal.aborted) return;
+    if (cafe) return handleQtc(cafe, signal);
     const answer = await askQtc(text, locale, signal);
     if (signal.aborted) return;
     if (answer) return handleQtc(answer, signal);

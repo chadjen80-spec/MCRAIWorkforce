@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net11.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RootNamespace>McrCafe.Client.Core</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Windows DPAPI for the device secret (Microsoft package, no third-party runtime code). -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="McrCafe.Client.Tests" />
+  </ItemGroup>
+
+</Project>

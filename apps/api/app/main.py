@@ -11,6 +11,9 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import assets, assistant, jobs, posters, system
+from app.cafe import api as cafe_api
+from app.cafe import assistant as cafe_assistant
+from app.cafe import device_api as cafe_device_api
 from app.config import get_settings
 from app.errors import AppError
 from app.logging_config import configure_logging
@@ -86,6 +89,11 @@ def create_app() -> FastAPI:
     app.include_router(qtc_billing_api.router)
     app.include_router(qtc_assistant_api.router)
     app.include_router(qtc_dashboard.router)
+    # MCR Smart Café: always mounted, but every route answers 404 FEATURE_DISABLED unless CAFE_ENABLED is true.
+    app.include_router(cafe_api.router)
+    app.include_router(cafe_assistant.router)
+    app.include_router(cafe_device_api.router)
+    app.include_router(cafe_device_api.ws_router)
     return app
 
 

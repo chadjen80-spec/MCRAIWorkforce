@@ -7,15 +7,20 @@ import type { Locale } from "@/i18n/dictionaries";
 import { api } from "@/lib/api";
 import { decide } from "@/lib/intent";
 
+export type CafeIntent = "launch_app" | "get_remaining_time" | "request_staff" | "order_food" | "top_up_time" | "print_document";
+
 export type QtcIntent = "create_quotation" | "pending_quotations" | "unpaid_customers" | "receivables_summary" | "collection_drafts";
 
 export interface QtcConfirm {
-  action: "create_quotation" | "draft_reminders";
+  // "launch_app" / "request_staff" come from the café assistant (lib/cafeAssistant), which shares this card and flow.
+  action: "create_quotation" | "draft_reminders" | "launch_app" | "request_staff";
   payload: Record<string, unknown>;
 }
 
 export interface QtcAnswer {
-  intent: QtcIntent | null;
+  intent: QtcIntent | CafeIntent | null;
+  /** "cafe" when the MCR Smart Café assistant answered; its confirm goes to /v1/cafe/assistant/confirm. */
+  source?: "qtc" | "cafe";
   agent: string | null;
   reply: string;
   data: {

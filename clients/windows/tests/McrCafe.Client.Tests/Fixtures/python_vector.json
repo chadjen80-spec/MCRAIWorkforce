@@ -1,0 +1,6 @@
+{
+  "note": "Signed by apps/api app.cafe.signing (Python cryptography) with a throwaway key; proves C# verifies Python signatures.",
+  "public_key": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE8H7qimZ8RkUuGq7faJWYtmDlLWuZ\nMXlaYuzd9s8tT/Vju/z+yMy/EgOqVj2wa/q0kGz/r/QgvFqGzmuulb3BrA==\n-----END PUBLIC KEY-----\n",
+  "envelope": "{\"args\":{\"app_id\":\"demo-game\"},\"command_id\":\"7d1f3a52-5a0e-4c39-9a51-3f0f4b8f2c11\",\"device_id\":\"5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d\",\"expires_at\":1764000060,\"issued_at\":1764000000,\"nonce\":\"Zm9vYmFyYmF6cXV4\",\"org_id\":\"0b5c9a8e-1d2f-4e3a-8b7c-6d5e4f3a2b1c\",\"seat_label\":\"12\",\"type\":\"launch_app\",\"v\":1}",
+  "signature": "LxqHriAQFY_QGfOB9WuvIf4ek6pfdIKrJI-p88ZZ8AoVgZGRD8KqyxpxdgaPnChvI9iodSeqCz73ajLYC13mWg"
+}

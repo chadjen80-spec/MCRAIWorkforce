@@ -6,6 +6,7 @@ import { useState } from "react";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/dictionaries";
 import { api, authRequest } from "@/lib/api";
+import { CAFE_NAV_ENABLED } from "@/lib/cafe";
 import type { Session } from "@/lib/types";
 import { useApi } from "@/lib/useApi";
 import { Button, cx } from "./ui";
@@ -18,6 +19,7 @@ const ICONS = {
   deliverables: "M3 5h18v14H3zM3 15l5-5 4 4 3-3 6 6M15.5 9.5h.01",
   posters: "M6 2h12v20H6zM9 6h6M9 10h6M8.5 15.5l2-2 2 2 3-3",
   qtc: "M4 4h16v16H4zM8 9h8M8 13h5M14.5 16.5h2M12 2v2M12 20v2",
+  cafe: "M3 6h18v11H3zM8 21h8M12 17v4M7 10h2M8 9v2M15 10h.01M17 11h.01",
   settings:
     "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.8 1.2V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z",
 } as const;
@@ -30,6 +32,8 @@ const NAV: { href: string; key: MessageKey; icon: keyof typeof ICONS }[] = [
   { href: "/posters", key: "nav.posters", icon: "posters" },
   { href: "/deliverables", key: "nav.deliverables", icon: "deliverables" },
   { href: "/qtc", key: "nav.qtc", icon: "qtc" },
+  // MCR Smart Café appears only when the deployment enables it (NEXT_PUBLIC_CAFE_ENABLED=1).
+  ...(CAFE_NAV_ENABLED ? [{ href: "/cafe", key: "nav.cafe" as MessageKey, icon: "cafe" as const }] : []),
   { href: "/settings", key: "nav.settings", icon: "settings" },
 ];
 
