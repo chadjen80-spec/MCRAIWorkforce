@@ -81,6 +81,8 @@ class ToolCall:
 SEAT_RE = re.compile(r"(?:เครื่อง(?:ที่)?|ที่นั่ง(?:ที่)?|โต๊ะ(?:ที่)?|\bseat|\bpc)\s*(?:no\.?|#|number)?\s*([A-Za-z]?\d{1,4}[A-Za-z]?)\b", re.I)
 LAUNCH_VERB = re.compile(r"เปิด|เล่น|รัน|เข้าเกม|\b(launch|open|start|play|run)\b", re.I)
 GAME_WORD = re.compile(r"เกม|\bgame\b|\bplay\b|เล่น", re.I)
+# "เปิดหน้าร้านเกม" / "open the games page" ask for a page, not a game: Mira opens café pages on the web side.
+PAGE_WORD = re.compile(r"หน้า|เมนู|ร้านเกม|\b(page|screen|menu|tab)\b", re.I)
 RULES: list[tuple[str, re.Pattern[str]]] = [
     ("request_staff", re.compile(r"เรียก(พนักงาน|แอดมิน|น้อง|staff)|ขอความช่วยเหลือ|ช่วยด้วย|call (a |the )?(staff|admin)|need (some )?help", re.I)),
     ("get_remaining_time", re.compile(r"เหลือเวลา|เวลา(ที่)?เหลือ|เหลือ(อีก)?กี่(นาที|ชั่วโมง|ชม)|time (left|remaining)|remaining time|how much time", re.I)),
@@ -116,9 +118,11 @@ def plan_rules(text: str, apps: list[CafeApp]) -> ToolCall | None:
         app = match_app(text, apps)
         if app is not None:
             return ToolCall("launch_app", {**args, "app": app.name})
-        if GAME_WORD.search(text):  # "เปิดเกม X" with an X we do not have: say so instead of guessing
+        # "เปิดเกม X" with an X we do not have: say so instead of guessing. A page request is not a launch.
+        if GAME_WORD.search(text) and not PAGE_WORD.search(text):
             spoken = SEAT_RE.sub("", LAUNCH_VERB.sub("", text))
-            spoken = re.sub(r"เกม|โปรแกรม|ให้หน่อย|หน่อย|ให้|ครับ|ค่ะ|คะ|นะ|ที่|please|\bgame\b|\bthe\b", "", spoken, flags=re.I).strip(" ,.!?")
+            spoken = re.sub(r"เกม|โปรแกรม|ให้หน่อย|หน่อย|ให้|อยาก|ขอ|ครับ|ค่ะ|คะ|นะ|ที่|please|\bgame\b|\bthe\b", "", spoken, flags=re.I)
+            spoken = re.sub(r"\s+", " ", spoken).strip(" ,.!?")
             return ToolCall("launch_app", {**args, "app": spoken[:64]})
     return None
 

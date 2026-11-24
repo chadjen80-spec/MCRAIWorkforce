@@ -86,12 +86,17 @@ const NAV_FILLER_TH = ["ต้องการ", "อยาก", "สร้าง
 const CREATE_WORDS = /ต้องการ|อยาก|สร้าง|ทำ|ใหม่|เพิ่ม|\b(want|would like|like to|create|make|do|new|add)\b/i;
 
 export function qtcPageFor(text: string): QtcPage | null {
+  return pageFor(text, QTC_PAGES);
+}
+
+// The page whose name is the whole of `text`, apart from filler words around it.
+function pageFor<T>(text: string, pages: { page: T; create?: T; words: string[] }[]): T | null {
   const wantsNew = CREATE_WORDS.test(text);
   let s = text.toLowerCase().replace(/[.,!?;:"'“”()&]/g, " ");
   for (const w of NAV_FILLER_EN) s = s.replace(new RegExp(`\\b${w}\\b`, "g"), " ");
   s = s.replace(/\s+/g, "");
   // Thai filler words only around the name, so the name itself is never altered
-  for (const { page, create, words } of QTC_PAGES) {
+  for (const { page, create, words } of pages) {
     for (const word of words) {
       const i = s.indexOf(word);
       if (i < 0) continue;
@@ -101,4 +106,35 @@ export function qtcPageFor(text: string): QtcPage | null {
     }
   }
   return null;
+}
+
+// Saying an MCR Smart Café page name opens that page (Mira checks this only when the café menu is switched on).
+// Words that Sales & Finance also uses ("ออเดอร์", "orders", "ตั้งค่า") need the café in them, and the Sales & Finance
+// check runs first. Actions ("สั่งอาหาร", "เปิด Steam") are not page names: they go to the café assistant.
+export interface CafePage {
+  path: string;
+  name: "overview" | "devices" | "sessions" | "games" | "orders" | "printing" | "members" | "reports" | "settings";
+}
+
+const CAFE_PAGES: { page: CafePage; words: string[] }[] = [
+  {
+    page: { path: "/cafe/devices", name: "devices" },
+    words: ["เครื่องลูกข่าย", "เครื่องลูก", "ที่นั่ง", "อุปกรณ์ร้านเกม", "devices", "cafedevices", "seatpcs", "seats"],
+  },
+  { page: { path: "/cafe/sessions", name: "sessions" }, words: ["รอบเล่น", "รอบการเล่น", "sessions", "playsessions", "cafesessions"] },
+  { page: { path: "/cafe/games", name: "games" }, words: ["คลังเกม", "รายการเกม", "เกม", "games", "gamelibrary", "cafegames"] },
+  { page: { path: "/cafe/orders", name: "orders" }, words: ["ออเดอร์อาหาร", "รายการสั่งอาหาร", "foodorders", "cafeorders"] },
+  { page: { path: "/cafe/printing", name: "printing" }, words: ["งานพิมพ์", "งานปริ้น", "printing", "printjobs", "cafeprinting"] },
+  { page: { path: "/cafe/members", name: "members" }, words: ["สมาชิกร้านเกม", "สมาชิก", "members", "membership", "memberships", "cafemembers"] },
+  { page: { path: "/cafe/reports", name: "reports" }, words: ["รายงานร้านเกม", "รายงานร้าน", "cafereports", "cafereport"] },
+  { page: { path: "/cafe/settings", name: "settings" }, words: ["ตั้งค่าร้านเกม", "ตั้งค่าร้าน", "cafesettings"] },
+  // Last, so a page name above always wins ("ร้านเกม" contains "เกม" but is the overview).
+  {
+    page: { path: "/cafe", name: "overview" },
+    words: ["ภาพรวมร้านเกม", "ร้านเกม", "สมาร์ทคาเฟ่", "คาเฟ่", "smartcafé", "smartcafe", "café", "cafe", "internetcafe", "pccafe", "cafeoverview"],
+  },
+];
+
+export function cafePageFor(text: string): CafePage | null {
+  return pageFor(text, CAFE_PAGES);
 }

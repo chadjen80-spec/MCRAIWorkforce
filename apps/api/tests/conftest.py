@@ -31,8 +31,11 @@ os.environ.update({
 })
 # Tests must never reach real providers. An empty environment value overrides whatever the
 # developer's local .env file configures (a real OpenAI key, a running ComfyUI, Redis).
-for var in ("OPENAI_API_KEY", "OPENAI_CONTENT_MODEL", "COMFYUI_URL", "REDIS_URL"):
+for var in ("OPENAI_API_KEY", "OPENAI_CONTENT_MODEL", "COMFYUI_URL", "REDIS_URL", "CAFE_COMMAND_SIGNING_KEY", "CAFE_DEVICE_JWT_SECRET"):
     os.environ[var] = ""
+# Smart Café starts off in every test (tests that need it switch it on), whatever the local .env says.
+os.environ["CAFE_ENABLED"] = "false"
+os.environ.pop("CAFE_MODULES", None)
 
 from fastapi.testclient import TestClient  # noqa: E402
 from PIL import Image  # noqa: E402

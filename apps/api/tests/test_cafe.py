@@ -259,8 +259,9 @@ def test_mira_reports_refusals_and_waiting_honestly(cafe, client, auth):
     assert help_["confirm"]["action"] == "request_staff"
     client.post("/v1/cafe/assistant/confirm", json=help_["confirm"], headers=auth)
     assert client.get("/v1/cafe/assist", headers=auth).json()["items"][0]["source"] == "mira"
-    # creative and sales requests are not café commands
-    for text in ("เปิดงานโปสเตอร์โปรโมชันใหม่", "สร้างใบเสนอราคาให้ลูกค้า ABC"):
+    assert unknown["data"]["app"] == "Minecraft"
+    # creative and sales requests, and requests for a café page, are not café commands
+    for text in ("เปิดงานโปสเตอร์โปรโมชันใหม่", "สร้างใบเสนอราคาให้ลูกค้า ABC", "เปิดหน้าร้านเกม", "open the games page", "เปิดหน้าคลังเกม"):
         assert client.post("/v1/cafe/assistant", json={"text": text}, headers=auth).json()["intent"] is None
 
 

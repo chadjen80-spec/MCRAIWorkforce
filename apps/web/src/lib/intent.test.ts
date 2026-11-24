@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { POSTER_WORDS, confirmAction, decide, posterIntent, qtcPageFor } from "./intent";
+import { POSTER_WORDS, cafePageFor, confirmAction, decide, posterIntent, qtcPageFor } from "./intent";
 
 describe("decide: confirming a spoken command", () => {
   it("understands Thai yes / no / design", () => {
@@ -142,6 +142,46 @@ describe("qtcPageFor: saying a page name opens that Sales & Finance page", () =>
       "ราคาของบริการถ่ายโดรนเท่าไหร่",
     ]) {
       expect(qtcPageFor(text), text).toBeNull();
+    }
+  });
+});
+
+describe("cafePageFor: saying a Smart Café page name opens that page", () => {
+  const cases: [string, string][] = [
+    ["ร้านเกม", "/cafe"],
+    ["เปิดหน้าร้านเกม", "/cafe"],
+    ["Smart Café", "/cafe"],
+    ["open the cafe", "/cafe"],
+    ["เครื่องลูก", "/cafe/devices"],
+    ["ไปที่หน้าเครื่องลูก", "/cafe/devices"],
+    ["ขอดูที่นั่งทั้งหมดค่ะ", "/cafe/devices"],
+    ["open the cafe devices page", "/cafe/devices"],
+    ["รอบเล่น", "/cafe/sessions"],
+    ["sessions", "/cafe/sessions"],
+    ["คลังเกม", "/cafe/games"],
+    ["เปิดหน้าเกม", "/cafe/games"],
+    ["show me the games", "/cafe/games"],
+    ["ออเดอร์อาหาร", "/cafe/orders"],
+    ["งานพิมพ์", "/cafe/printing"],
+    ["สมาชิก", "/cafe/members"],
+    ["รายงานร้านเกม", "/cafe/reports"],
+    ["ตั้งค่าร้านเกม", "/cafe/settings"],
+    ["cafe settings", "/cafe/settings"],
+  ];
+  it.each(cases)("%s -> %s", (text, path) => {
+    expect(cafePageFor(text)?.path).toBe(path);
+  });
+
+  it("leaves actions and longer sentences to the café assistant and Mira's other flows", () => {
+    for (const text of ["เปิด Steam ที่เครื่อง 12", "เครื่อง 12 เหลือเวลาเท่าไหร่", "สั่งอาหาร", "เรียกพนักงาน", "ทำโปสเตอร์ร้านเกมลดราคา", "อยากเล่นเกม Valorant"]) {
+      expect(cafePageFor(text), text).toBeNull();
+    }
+  });
+
+  it("keeps Sales & Finance page names with Sales & Finance", () => {
+    for (const text of ["ออเดอร์", "orders", "ใบสั่งขาย"]) {
+      expect(cafePageFor(text), text).toBeNull();
+      expect(qtcPageFor(text)?.path, text).toBe("/qtc/orders");
     }
   });
 });

@@ -48,8 +48,9 @@ import type {
   Session,
   Task,
 } from "@/lib/types";
-import { POSTER_WORDS, confirmAction, posterIntent, qtcPageFor } from "@/lib/intent";
+import { POSTER_WORDS, cafePageFor, confirmAction, posterIntent, qtcPageFor } from "@/lib/intent";
 import { askQtc, confirmQtc, qtcDecision, type QtcAnswer } from "@/lib/qtcAssistant";
+import { CAFE_NAV_ENABLED } from "@/lib/cafe";
 import { askCafe, confirmCafe } from "@/lib/cafeAssistant";
 import { useApi } from "@/lib/useApi";
 import { VoiceError, canListen, listenOnce, speak } from "@/lib/voice";
@@ -334,6 +335,15 @@ export default function AssistantPage() {
       setQtc(null);
       await say(t(`assistant.openPage.${page.name}`), signal);
       if (!signal.aborted) router.push(page.path);
+      return;
+    }
+    // A Smart Café page name ("ร้านเกม", "เครื่องลูก", "cafe devices") opens that page when the café menu is on.
+    const cafePage = CAFE_NAV_ENABLED ? cafePageFor(text) : null;
+    if (cafePage) {
+      setPending(null);
+      setQtc(null);
+      await say(t(`assistant.openCafePage.${cafePage.name}`), signal);
+      if (!signal.aborted) router.push(cafePage.path);
       return;
     }
     if (text.length < 5) return say(t("assistant.tooShort"), signal);
