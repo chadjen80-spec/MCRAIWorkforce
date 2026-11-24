@@ -5,6 +5,7 @@ import { I18nProvider } from "@/i18n/I18nProvider";
 import { dictionaries } from "@/i18n/dictionaries";
 import { askCafe, confirmCafe } from "@/lib/cafeAssistant";
 import { formatRemaining, type CafeSeat } from "@/lib/cafe";
+import { CafeMiraPanel } from "./CafeMiraPanel";
 import { CafeShell } from "./CafeShell";
 import { DevicesBoard, SeatCard, resultText } from "./DevicesBoard";
 
@@ -145,5 +146,29 @@ describe("Mira café commands", () => {
     expect(await askCafe("ทำโปสเตอร์โปรโมชัน", "th")).toBeNull();
     server({}); // 404 FEATURE_DISABLED
     expect(await askCafe("เปิด Steam", "th")).toBeNull();
+  });
+});
+
+describe("café view inside Mira's screen", () => {
+  it("shows live figures and every seat with its PC status and time left", async () => {
+    server({
+      "GET /v1/cafe/features": features(true),
+      "GET /v1/cafe/seats": { items: [seat, { ...seat, id: "s13", label: "13", device: null, session: null, open_assists: 0 }] },
+      "GET /v1/cafe/assist": { items: [{ id: "h1", seat_label: "12", message: "", source: "seat", status: "open", created_at: "2026-11-24T10:00:00Z" }] },
+    });
+    wrap(<CafeMiraPanel />);
+    expect(await screen.findByText(`${th["cafe.seat"]} 12`)).toBeTruthy();
+    expect(screen.getByText(`${th["cafe.seat"]} 13`)).toBeTruthy();
+    expect(screen.getByText(th["cafe.online"])).toBeTruthy();
+    expect(screen.getByText(th["cafe.noDevice"])).toBeTruthy();
+    expect(screen.getByText(th["cafe.remaining"].replace("{time}", "0:52:05"))).toBeTruthy();
+    const figure = (key: keyof typeof th) => screen.getByText(th[key]).nextElementSibling?.textContent;
+    expect([figure("cafe.overview.seats"), figure("cafe.overview.online"), figure("cafe.overview.active"), figure("cafe.overview.help")]).toEqual(["2", "1", "1", "1"]);
+  });
+
+  it("says the café is switched off instead of showing anything", async () => {
+    server({ "GET /v1/cafe/features": features(false) });
+    wrap(<CafeMiraPanel />);
+    expect(await screen.findByText(th["cafe.disabled.title"])).toBeTruthy();
   });
 });

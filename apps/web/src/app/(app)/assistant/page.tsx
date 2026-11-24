@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { AgentGraph } from "@/components/AgentGraph";
+import { CafeMiraPanel } from "@/components/cafe/CafeMiraPanel";
 import { AssistantAvatar, type AvatarMode } from "@/components/AssistantAvatar";
 import { ChatBubbles } from "@/components/PosterChat";
 import { LogoUploadButton } from "@/components/LogoUploadButton";
@@ -48,7 +49,7 @@ import type {
   Session,
   Task,
 } from "@/lib/types";
-import { POSTER_WORDS, cafePageFor, confirmAction, posterIntent, qtcPageFor } from "@/lib/intent";
+import { POSTER_WORDS, cafePageFor, confirmAction, posterIntent, qtcPageFor, type CafePage } from "@/lib/intent";
 import { askQtc, confirmQtc, qtcDecision, type QtcAnswer } from "@/lib/qtcAssistant";
 import { CAFE_NAV_ENABLED } from "@/lib/cafe";
 import { askCafe, confirmCafe } from "@/lib/cafeAssistant";
@@ -89,6 +90,8 @@ export default function AssistantPage() {
 
   // --- poster design on Mira's screen -------------------------------------------------------
   const [posterMode, setPosterMode] = useState(false);
+  // A café page name said to Mira shows the live café view here, in place of the agent graph.
+  const [cafeView, setCafeView] = useState<CafePage | null>(null);
   const [posterSpec, setPosterSpec] = useState<PosterSpec>(EMPTY_POSTER);
   const posterSpecRef = useRef(posterSpec);
   useEffect(() => {
@@ -342,8 +345,9 @@ export default function AssistantPage() {
     if (cafePage) {
       setPending(null);
       setQtc(null);
+      setJobId(null);
+      setCafeView(cafePage);
       await say(t(`assistant.openCafePage.${cafePage.name}`), signal);
-      if (!signal.aborted) router.push(cafePage.path);
       return;
     }
     if (text.length < 5) return say(t("assistant.tooShort"), signal);
@@ -548,7 +552,10 @@ export default function AssistantPage() {
     setPending(null);
     setJobId(id);
   };
-  const backToMira = () => setJobId(null);
+  const backToMira = () => {
+    setJobId(null);
+    setCafeView(null);
+  };
   const createPosterNow = async () => {
     const signal = begin();
     await createPoster(signal);
@@ -742,7 +749,8 @@ export default function AssistantPage() {
   // top, Mira steps aside to the corner and keeps talking, and the graph takes the main area.
   const graphStage = jobId !== null;
   const posterStage = posterMode && !graphStage;
-  const sideStage = graphStage || posterStage;
+  const cafeStage = cafeView !== null && !graphStage && !posterMode;
+  const sideStage = graphStage || posterStage || cafeStage;
 
   const snap = ops.snapshot;
   const s = snap?.summary;
@@ -1036,6 +1044,23 @@ export default function AssistantPage() {
             ) : (
               <div className="flex h-64 items-center justify-center rounded-xl border border-line bg-[#050912] text-sm text-dim">{t("common.loading")}</div>
             )}
+          </div>
+        )}
+
+        {cafeStage && cafeView && (
+          <div className={cx("stage-swap relative px-3 pb-3 sm:px-6 sm:pb-6", fullScreen && "flex min-h-0 flex-1 flex-col")}>
+            <div className="mb-2 mr-32 flex min-h-9 flex-wrap items-center gap-2 text-sm font-semibold text-slate-800 sm:mr-52">
+              <h2 className="text-sm font-semibold">{t("cafe.title")}</h2>
+              <span className="ml-auto flex flex-wrap gap-2">
+                <button type="button" onClick={backToMira} className={buttonClass("ghost", "sm")}>
+                  {t("graph.back")}
+                </button>
+                <Link href={cafeView.path} className={buttonClass("secondary", "sm")}>
+                  {t(`assistant.openCafeFull.${cafeView.name}`)}
+                </Link>
+              </span>
+            </div>
+            <CafeMiraPanel fill={fullScreen} />
           </div>
         )}
       </div>
