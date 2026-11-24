@@ -64,16 +64,23 @@ try
                     await Task.Delay(1000, cts.Token).ContinueWith(_ => { });
                 }
             });
-            var lastShown = "";
+            // Print the remaining time when the session starts or ends and then once per minute (the title bar shows seconds).
+            int? lastMinute = null;
             var printer = Task.Run(async () =>
             {
                 while (!cts.IsCancellationRequested)
                 {
                     await Task.Delay(5000, cts.Token).ContinueWith(_ => { });
-                    var line = agent.Status is null ? "" : $"seat {id.SeatLabel}: {(agent.Status.SessionActive ? $"{TimeSpan.FromSeconds(agent.RemainingSecondsNow()):h\\:mm\\:ss} left" : "no active session")}";
-                    if (line != "" && line[..^3] != (lastShown.Length > 3 ? lastShown[..^3] : lastShown))
-                        Console.WriteLine($"{DateTime.Now:HH:mm:ss} {line}");
-                    lastShown = line;
+                    if (agent.Status is null)
+                        continue;
+                    var left = agent.RemainingSecondsNow();
+                    var minute = agent.Status.SessionActive && left > 0 ? left / 60 : -1;
+                    if (minute == lastMinute)
+                        continue;
+                    lastMinute = minute;
+                    Console.WriteLine(minute >= 0
+                        ? $"{DateTime.Now:HH:mm:ss} seat {id.SeatLabel}: {TimeSpan.FromSeconds(left):h\\:mm\\:ss} left"
+                        : $"{DateTime.Now:HH:mm:ss} seat {id.SeatLabel}: no active session");
                 }
             });
             await agent.RunAsync(cts.Token);
