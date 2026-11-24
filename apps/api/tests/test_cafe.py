@@ -239,6 +239,22 @@ def test_mira_launch_speaks_the_real_result(cafe, client, auth):
     assert seen[0]["args"] == {"app_id": "steam"}
 
 
+def test_mira_explains_a_program_that_needs_admin_rights(cafe, client, auth):
+    seat, dev = _ready(client, auth)
+    out = client.post("/v1/cafe/assistant", json={"text": "เปิด Steam ที่เครื่อง 12"}, headers=auth).json()
+    stop, seen = threading.Event(), []
+    worker = threading.Thread(target=_answer_commands, args=(dev,), kwargs={"stop": stop, "seen": seen, "ok": False, "code": "NEEDS_ELEVATION"},
+                              daemon=True)
+    worker.start()
+    try:
+        done = client.post("/v1/cafe/assistant/confirm", json=out["confirm"], headers=auth).json()
+    finally:
+        stop.set()
+        worker.join(5)
+    assert done["data"]["status"] == "failed" and done["data"]["result"]["code"] == "NEEDS_ELEVATION"
+    assert done["reply"].startswith("Steam ต้องใช้สิทธิ์ผู้ดูแลระบบ") and "แล้วค่ะ" not in done["reply"]
+
+
 def test_mira_reports_refusals_and_waiting_honestly(cafe, client, auth):
     cafe.cafe_launch_wait_seconds = 0.3
     seat, dev = _ready(client, auth)

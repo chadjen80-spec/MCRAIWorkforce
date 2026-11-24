@@ -115,6 +115,7 @@ describe("devices page", () => {
   it("never reports an unanswered command as a success", () => {
     expect(resultText(t, { status: "delivered", result: {} })).toBe(th["cafe.result.waiting"]);
     expect(resultText(t, { status: "failed", result: { code: "WEIRD" } })).toBe(`${th["cafe.result.START_FAILED"]} (WEIRD)`);
+    expect(resultText(t, { status: "failed", result: { code: "NEEDS_ELEVATION" } })).toBe(th["cafe.result.NEEDS_ELEVATION"]);
     expect(formatRemaining(3725)).toBe("1:02:05");
     expect(formatRemaining(-5)).toBe("0:00:00");
   });

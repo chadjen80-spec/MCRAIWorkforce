@@ -1234,6 +1234,7 @@ const en = {
   "cafe.result.NOT_INSTALLED": "The PC could not find the program",
   "cafe.result.START_FAILED": "The PC could not start it",
   "cafe.result.EXPIRED": "No answer from the PC before the command expired",
+  "cafe.result.NEEDS_ELEVATION": "Needs administrator rights: run the café client as administrator on this PC",
   "cafe.result.waiting": "Sent; the PC has not answered yet",
 } as const;
 
@@ -2472,6 +2473,7 @@ const th: Record<MessageKey, string> = {
   "cafe.result.NOT_INSTALLED": "เครื่องหาไฟล์โปรแกรมไม่พบ",
   "cafe.result.START_FAILED": "เครื่องเปิดโปรแกรมไม่สำเร็จ",
   "cafe.result.EXPIRED": "เครื่องไม่ตอบกลับก่อนคำสั่งหมดอายุ",
+  "cafe.result.NEEDS_ELEVATION": "ต้องใช้สิทธิ์ผู้ดูแลระบบ: ให้รันโปรแกรมของร้านบนเครื่องนี้ในโหมดผู้ดูแลระบบ",
   "cafe.result.waiting": "ส่งแล้ว เครื่องยังไม่ตอบกลับ",
 };
 

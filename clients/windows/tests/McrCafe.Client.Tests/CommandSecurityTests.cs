@@ -176,6 +176,26 @@ public sealed class CommandSecurityTests : IDisposable
     }
 
     [Fact]
+    public void Program_needing_admin_rights_is_reported_clearly_without_a_uac_prompt()
+    {
+        var verifier = new CommandVerifier(_server.PublicPem, _server.DeviceId, _server.OrgId, new ReplayCache(time: _time), () => _allowlist, _time);
+        var launcher = new AppLauncher(new ThrowingStarter(new System.ComponentModel.Win32Exception(740)));
+        var (env, sig) = _server.Sign();
+        var result = new CommandProcessor(verifier, () => _allowlist, launcher).Process(env, sig).Result;
+        Assert.Equal("NEEDS_ELEVATION", result.Code);
+        Assert.False(result.Ok);
+        Assert.Contains("administrator", result.Message);
+        // any other start failure keeps its own code
+        var other = new AppLauncher(new ThrowingStarter(new System.ComponentModel.Win32Exception(2))).Launch(_allowlist.Entries.Single());
+        Assert.Equal("START_FAILED", other.Code);
+    }
+
+    private sealed class ThrowingStarter(Exception ex) : IProcessStarter
+    {
+        public int Start(ProcessStartInfo info) => throw ex;
+    }
+
+    [Fact]
     public void Ping_answers_pong_without_launching()
     {
         var (env, sig) = _server.Sign("ping", new { });

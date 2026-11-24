@@ -23,6 +23,9 @@ public sealed class SystemProcessStarter : IProcessStarter
 /// <summary>Starts an allowlisted program: absolute path, fixed arguments, no shell, no server-supplied text.</summary>
 public sealed class AppLauncher(IProcessStarter? starter = null)
 {
+    /// <summary>Win32 ERROR_ELEVATION_REQUIRED: "The requested operation requires elevation."</summary>
+    internal const int ErrorElevationRequired = 740;
+
     private readonly IProcessStarter _starter = starter ?? new SystemProcessStarter();
 
     public CommandResult Launch(AllowlistEntry entry)
@@ -42,6 +45,13 @@ public sealed class AppLauncher(IProcessStarter? starter = null)
         {
             var pid = _starter.Start(info);
             return new CommandResult(true, "STARTED", "", pid, entry.Id);
+        }
+        catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == ErrorElevationRequired)
+        {
+            // The program's manifest asks for administrator rights. The client never raises a UAC prompt or works around
+            // it: the café runs the client with the rights its games need, or the game is started another way.
+            return new CommandResult(false, "NEEDS_ELEVATION",
+                $"{entry.Name} needs administrator rights, and this client is not running as administrator", AppId: entry.Id);
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {

@@ -20,7 +20,7 @@ const STATUS_TONE: Record<CafeCommand["status"], "neutral" | "info" | "success" 
   expired: "warn",
 };
 
-const KNOWN_RESULTS = new Set(["STARTED", "NOT_ALLOWLISTED", "NOT_INSTALLED", "START_FAILED", "EXPIRED"]);
+const KNOWN_RESULTS = new Set(["STARTED", "NOT_ALLOWLISTED", "NOT_INSTALLED", "START_FAILED", "EXPIRED", "NEEDS_ELEVATION"]);
 
 /** The seat PC's real answer in words; an unexpected code is shown as a failure with the code. */
 export function resultText(t: (k: MessageKey) => string, cmd: Pick<CafeCommand, "status" | "result">): string {

@@ -223,6 +223,9 @@ RESULT_TEXT: dict[str, tuple[str, str]] = {
     "NOT_INSTALLED": ("เครื่องที่นั่ง {seat} หาไฟล์ {app} ไม่พบค่ะ", "The PC at seat {seat} could not find {app}'s program file."),
     "START_FAILED": ("เครื่องที่นั่ง {seat} เปิด {app} ไม่สำเร็จค่ะ ({message})", "The PC at seat {seat} could not start {app} ({message})."),
     "EXPIRED": ("คำสั่งเปิด {app} หมดเวลาก่อนเครื่องที่นั่ง {seat} ตอบกลับค่ะ", "The launch of {app} expired before seat {seat} answered."),
+    "NEEDS_ELEVATION": ("{app} ต้องใช้สิทธิ์ผู้ดูแลระบบ เครื่องที่นั่ง {seat} จึงเปิดให้ไม่ได้ค่ะ กรุณาให้พนักงานรันโปรแกรมของร้านในโหมดผู้ดูแลระบบ",
+                        "{app} needs administrator rights, so the PC at seat {seat} could not open it. "
+                        "Staff need to run the café client as administrator."),
 }
 
 
