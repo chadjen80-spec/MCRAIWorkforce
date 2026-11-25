@@ -171,3 +171,21 @@ def test_mira_is_honest_about_the_menu(shop, client, auth):
     # game launches and other flows are unchanged
     assert client.post("/v1/cafe/assistant", json={"text": "เครื่อง 12 เหลือเวลาเท่าไหร่"}, headers=auth).json()["intent"] == "get_remaining_time"
     assert client.post("/v1/cafe/assistant", json={"text": "ทำโปสเตอร์โปรโมชันมาม่า"}, headers=auth).json()["intent"] is None
+
+
+def test_quantities_stay_with_their_own_item():
+    from types import SimpleNamespace as Item
+
+    from app.cafe.food_assistant import match_lines
+
+    menu = [Item(id=1, name="มาม่าต้มยำ", aliases=["มาม่า"]), Item(id=2, name="โค้ก", aliases=["coke"]),
+            Item(id=3, name="ชาไทยเย็น", aliases=["ชาไทย"]), Item(id=4, name="เฟรนช์ฟรายส์", aliases=["fries"])]
+
+    def parse(text):
+        return [(i.name, q) for i, q in match_lines(text, menu)]
+
+    assert parse("ขอมาม่าสองที่ โค้กขวดนึง") == [("มาม่าต้มยำ", 2), ("โค้ก", 1)]  # unit before number, no borrowing
+    assert parse("ชาไทยแก้วนึง กับโค้กสามขวด") == [("ชาไทยเย็น", 1), ("โค้ก", 3)]
+    assert parse("order fries and 2 cokes") == [("เฟรนช์ฟรายส์", 1), ("โค้ก", 2)]
+    assert parse("coke x2 and an order of fries") == [("โค้ก", 2), ("เฟรนช์ฟรายส์", 1)]
+    assert parse("โค้ก 12 ขวด") == [("โค้ก", 12)]

@@ -18,8 +18,9 @@ NUMBER_WORDS = {
 UNITS = r"(?:ที่|แก้ว|จาน|ชาม|ขวด|กระป๋อง|ชิ้น|อัน|ห่อ|ถ้วย|กล่อง|ไม้|cups?|glass(?:es)?|bottles?|cans?|plates?|bowls?|pieces?|x)?"
 # English number words only as whole words ("an" is not the start of "and"); digits not inside a longer number
 _NUM = r"((?<!\d)\d{1,2}(?!\d)|(?<![a-z])(?:" + "|".join(sorted(NUMBER_WORDS, key=len, reverse=True)) + r")(?![a-z]))"
-AFTER = re.compile(r"^\s*(?:x\s*)?" + _NUM + r"\s*" + UNITS, re.I)
-BEFORE = re.compile(_NUM + r"\s*(?:x\s*)?" + UNITS + r"\s*$", re.I)
+AFTER = re.compile(r"^\s*(?:x\s*)?" + _NUM + r"\s*" + UNITS, re.I)  # "โค้ก 2 ขวด", "coke x2"
+AFTER_UNIT = re.compile(r"^\s*" + UNITS.rstrip("?") + r"\s*" + _NUM, re.I)  # Thai "โค้กขวดนึง", "ชาไทยแก้วนึง"
+BEFORE = re.compile(_NUM + r"\s*(?:x\s*)?" + UNITS + r"\s*$", re.I)  # "2 cokes", "สองโค้ก"
 
 
 def _num(word: str) -> int:
@@ -31,17 +32,20 @@ def _names(item: CafeMenuItem) -> list[str]:
 
 
 def match_lines(text: str, items: list[CafeMenuItem]) -> list[tuple[CafeMenuItem, int]]:
-    """Menu items named in the text with their quantities (default 1), longest names first, without overlaps."""
+    """Menu items named in the text with their quantities (default 1).
+
+    Pass 1 finds item names (longest first, no overlaps). Pass 2 reads each quantity left to right, only from the text
+    between that item and its neighbours, so one item's number is never borrowed by the next ("มาม่าสองที่ โค้กขวดนึง")."""
     low = text.lower()
     taken = [False] * len(low)
-    found: list[tuple[int, CafeMenuItem, int]] = []
+    spans: list[tuple[int, int, CafeMenuItem]] = []
     candidates = sorted(((n.lower().strip(), i) for i in items for n in _names(i)), key=lambda x: len(x[0]), reverse=True)
     for name, item in candidates:
         start = 0
         while (pos := low.find(name, start)) >= 0:
             end = pos + len(name)
             start = end
-            if any(taken[pos:end]) or any(f[1].id == item.id for f in found):
+            if any(taken[pos:end]) or any(s[2].id == item.id for s in spans):
                 continue
             # English names must be whole words ("tea" is not part of "steam"); a plural "s"/"es" is fine ("2 cokes")
             if name.isascii():
@@ -51,15 +55,21 @@ def match_lines(text: str, items: list[CafeMenuItem]) -> list[tuple[CafeMenuItem
                 end += plural
             for k in range(pos, end):
                 taken[k] = True
-            qty = 1
-            if m := AFTER.match(low[end:]):
-                qty = _num(m.group(1))
-                for k in range(end, end + m.end()):
-                    taken[k] = True
-            elif m := BEFORE.search(low[max(0, pos - 12):pos]):
-                qty = _num(m.group(1))
-            found.append((pos, item, max(1, min(qty, 20))))
-    return [(item, qty) for _, item, qty in sorted(found, key=lambda f: f[0])]
+            spans.append((pos, end, item))
+    spans.sort(key=lambda s: s[0])
+    found: list[tuple[CafeMenuItem, int]] = []
+    free_from = 0  # text before this offset already belongs to an earlier item (its name or its quantity)
+    for idx, (pos, end, item) in enumerate(spans):
+        next_start = spans[idx + 1][0] if idx + 1 < len(spans) else len(low)
+        after = low[end:next_start]
+        qty, used = 1, end
+        if (m := AFTER.match(after)) or (m := AFTER_UNIT.match(after)):
+            qty, used = _num(m.group(1)), end + m.end()
+        elif m := BEFORE.search(low[max(free_from, pos - 12):pos]):
+            qty = _num(m.group(1))
+        free_from = used
+        found.append((item, max(1, min(qty, 20))))
+    return found
 
 
 def resolve_named(items_arg: object, menu_items: list[CafeMenuItem]) -> tuple[list[tuple[CafeMenuItem, int]], list[str]]:
