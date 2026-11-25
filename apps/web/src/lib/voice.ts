@@ -197,6 +197,7 @@ async function cloudSpeak(text: string, lang: string, signal?: AbortSignal): Pro
     if (!blob.size || signal?.aborted) return false;
     url = URL.createObjectURL(blob);
     const audio = new Audio(url);
+    await measureLevel(audio);
     await new Promise<void>((resolve, reject) => {
       audio.onended = () => resolve();
       audio.onerror = () => reject(new Error("audio"));
@@ -214,8 +215,60 @@ async function cloudSpeak(text: string, lang: string, signal?: AbortSignal): Pro
   } catch {
     return false;
   } finally {
+    stopLevel();
     if (url) URL.revokeObjectURL(url);
   }
+}
+
+// --- voice loudness, for Mira's mouth ------------------------------------------------------------
+// While the cloud voice plays, an analyser measures how loud it is right now, so the avatar's mouth follows the
+// real sound. The audio is routed through Web Audio only when the audio context is already allowed to run: routing
+// through a suspended context would mute Mira, so in that case (and for the browser voice) no level is reported and
+// the avatar uses a talking rhythm instead.
+let audioCtx: AudioContext | null = null;
+let analyser: AnalyserNode | null = null;
+let levelSource: MediaElementAudioSourceNode | null = null;
+let samples: Uint8Array<ArrayBuffer> | null = null;
+
+async function measureLevel(audio: HTMLAudioElement): Promise<void> {
+  try {
+    const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AC) return;
+    audioCtx ??= new AC();
+    if (audioCtx.state !== "running") {
+      await Promise.race([audioCtx.resume().catch(() => {}), new Promise((r) => setTimeout(r, 150))]);
+    }
+    if (audioCtx.state !== "running") return;
+    levelSource = audioCtx.createMediaElementSource(audio);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 512;
+    samples = new Uint8Array(new ArrayBuffer(analyser.fftSize));
+    levelSource.connect(analyser);
+    analyser.connect(audioCtx.destination);
+  } catch {
+    stopLevel();
+  }
+}
+
+function stopLevel(): void {
+  try {
+    levelSource?.disconnect();
+    analyser?.disconnect();
+  } catch {
+    // already disconnected
+  }
+  levelSource = null;
+  analyser = null;
+}
+
+/** How loud Mira's voice is right now (0..1), or null when it cannot be measured. */
+export function speechLevel(): number | null {
+  if (!analyser || !samples) return null;
+  analyser.getByteTimeDomainData(samples);
+  let sum = 0;
+  for (const v of samples) sum += ((v - 128) / 128) ** 2;
+  const rms = Math.sqrt(sum / samples.length);
+  return Math.max(0, Math.min(1, (rms - 0.015) * 6));
 }
 
 /** Speak text aloud: cloud voice when available, otherwise the browser voice. Resolves when speech ends. */

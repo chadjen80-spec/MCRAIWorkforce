@@ -1,11 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { speechLevel } from "@/lib/voice";
+import { createFacePainter, eyeState, makeBlinker, mouthOpenness, mouthStep } from "./avatarFace";
 
 // Mira's 3D character, loaded from /models/nova.glb (a Blender export with unlit materials). The model
 // has no skeleton or face morphs, but its parts are separate nodes: `Head`, `ArmL`, `ArmR` and `Upper`
 // (everything above the legs). Mira breathes, follows the pointer, tilts her head while listening,
 // looks away while thinking, nods while speaking, bounces and waves when happy and droops when sad.
+// Her face (the `Face` mesh's painted picture) is repainted live: the mouth moves with her voice and the
+// eyes blink, or close happily when she celebrates (see ./avatarFace).
 // three.js and the model load on demand so other pages do not pay for them.
 
 export type AvatarMode = "idle" | "listening" | "thinking" | "speaking";
@@ -93,6 +97,26 @@ export function AssistantAvatar({
       const headRest = rest(head);
       const upperRest = rest(upper);
       const armRest = arms.map(rest);
+
+      // Live face: replace the face picture with a canvas copy that is repainted when the mouth or eyes change.
+      let face: { tex: import("three").CanvasTexture; draw: ReturnType<typeof createFacePainter>["draw"] } | null = null;
+      const faceMesh = node("Face") as import("three").Mesh | null;
+      const faceMat = faceMesh?.material as import("three").MeshBasicMaterial | undefined;
+      const faceImage = faceMat?.map?.image as CanvasImageSource | undefined;
+      if (faceMat?.map && faceImage) {
+        const canvas = document.createElement("canvas");
+        const painter = createFacePainter(faceImage, canvas);
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.flipY = faceMat.map.flipY;
+        tex.colorSpace = faceMat.map.colorSpace;
+        tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        faceMat.map.dispose();
+        faceMat.map = tex;
+        faceMat.needsUpdate = true;
+        face = { tex, draw: painter.draw };
+      }
+      const blink = makeBlinker(Math.floor(Math.random() * 1e9));
+      let mouth = 0; // eased mouth opening
 
       // Frame the head and upper body; the caption bubble covers the bottom of the stage anyway.
       const box = new THREE.Box3().setFromObject(model);
@@ -192,6 +216,15 @@ export function AssistantAvatar({
           const wave = side === 1 ? (0.9 + Math.sin(t * 9) * 0.35) * joy : 0.15 * joy;
           a.o.rotation.z = a.rot.z + side * (sway + wave - 0.25 * gloom);
         });
+
+        // face: mouth follows the voice (or a talking rhythm), eyes blink; still when reduced motion is requested
+        if (face) {
+          const speaking = m === "speaking";
+          const target = reduced ? 0 : mouthOpenness(t, speaking, speaking ? speechLevel() : null);
+          mouth += (target - mouth) * (target > mouth ? 0.55 : 0.35);
+          const eyes = eyeState(!reduced && blink(t), joy);
+          if (face.draw(eyes, mouthStep(mouth))) face.tex.needsUpdate = true;
+        }
 
         renderer.render(scene, camera);
       };
