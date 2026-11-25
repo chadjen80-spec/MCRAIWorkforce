@@ -42,8 +42,8 @@ Migration `0012_cafe` creates the tables. Every table has `organization_id`; eve
 
 - `CAFE_ENABLED=false` (default): every `/v1/cafe/*` route answers 404 `FEATURE_DISABLED`; Mira's café
   check returns "not a café command" so existing flows (creative jobs, QTC, posters) are untouched.
-- `CAFE_MODULES=devices,sessions,launcher,assistant,assist` (default list when enabled). Unfinished
-  modules (`orders`, `pos`, `members`, `printing`, `reports`) are off until listed.
+- `CAFE_MODULES=devices,sessions,launcher,assistant,assist,orders` (default list when enabled). Unfinished
+  modules (`pos`, `members`, `printing`, `reports`) are off until listed.
 - Web: `NEXT_PUBLIC_CAFE_ENABLED=1` shows the café navigation. Pages also ask the API
   (`GET /v1/cafe/features`) and show "not enabled" when the server says so.
 

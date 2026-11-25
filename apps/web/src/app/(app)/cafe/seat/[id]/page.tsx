@@ -9,6 +9,7 @@ import { use, useEffect, useState } from "react";
 import { AssistantAvatar, type AvatarMode } from "@/components/AssistantAvatar";
 import { CafeShell } from "@/components/cafe/CafeShell";
 import { resultText } from "@/components/cafe/DevicesBoard";
+import { FoodOrder, SeatOrders } from "@/components/cafe/FoodOrder";
 import { Button, ErrorState, LoadingBlock, cx } from "@/components/ui";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/dictionaries";
@@ -128,6 +129,10 @@ function SeatScreen({ seatId, features }: { seatId: string; features: CafeFeatur
                 );
               })}
             </ul>
+          ) : tab === "food" ? (
+            <FoodOrder seatId={seat.id} seatLabel={seat.label} />
+          ) : tab === "orders" ? (
+            <SeatOrders seatId={seat.id} />
           ) : (
             <p className="rounded-xl border border-dashed border-line p-8 text-center text-sm text-dim">{t("cafe.module.off.hint")}</p>
           )}

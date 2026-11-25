@@ -4,10 +4,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n/I18nProvider";
 import { dictionaries } from "@/i18n/dictionaries";
 import { askCafe, confirmCafe } from "@/lib/cafeAssistant";
-import { formatRemaining, type CafeSeat } from "@/lib/cafe";
+import { formatBaht, formatRemaining, sumBaht, type CafeSeat } from "@/lib/cafe";
 import { CafeMiraPanel } from "./CafeMiraPanel";
 import { CafeShell } from "./CafeShell";
 import { DevicesBoard, SeatCard, resultText } from "./DevicesBoard";
+import { FoodOrder } from "./FoodOrder";
+import { OrdersBoard } from "./OrdersBoard";
 
 vi.mock("next/navigation", () => ({ usePathname: () => "/cafe/devices", useRouter: () => ({ push: vi.fn() }) }));
 
@@ -171,5 +173,85 @@ describe("café view inside Mira's screen", () => {
     server({ "GET /v1/cafe/features": features(false) });
     wrap(<CafeMiraPanel />);
     expect(await screen.findByText(th["cafe.disabled.title"])).toBeTruthy();
+  });
+});
+
+describe("food & drink orders", () => {
+  const menu = {
+    categories: [
+      { id: "c1", name: "อาหาร", sort: 1, active: true },
+      { id: "c2", name: "เครื่องดื่ม", sort: 2, active: true },
+    ],
+    items: [
+      { id: "i1", category_id: "c1", name: "มาม่าต้มยำ", description: "", aliases: [], price: "45.00", list_price: null, is_new: true, available: true, sort: 0 },
+      { id: "i2", category_id: "c2", name: "โค้ก", description: "", aliases: [], price: "20.50", list_price: "25.00", is_new: false, available: true, sort: 0 },
+      { id: "i3", category_id: "c1", name: "ขนมปังปิ้ง", description: "", aliases: [], price: "30.00", list_price: null, is_new: false, available: false, sort: 0 },
+    ],
+  };
+
+  it("formats exact amounts without floating-point drift", () => {
+    expect(formatBaht("1234.50")).toBe("1,234.50");
+    expect(formatBaht("45.00")).toBe("45");
+    expect(sumBaht([{ price: "0.10", quantity: 3 }, { price: "20.50", quantity: 2 }])).toBe("41.30");
+  });
+
+  it("builds a cart and sends only item IDs and quantities, then shows the server's order", async () => {
+    const fetchMock = server({
+      "GET /v1/cafe/menu": menu,
+      "POST /v1/cafe/seats/s12/orders": {
+        id: "o1", number: 7, seat_label: "12", status: "placed", payment_status: "unpaid", payment_method: "counter", total: "86.00",
+        note: "ไม่เผ็ด", via: "seat", created_by: "user:a", created_at: "2026-11-25T10:00:00Z", paid_at: null, lines: [],
+      },
+    });
+    wrap(<FoodOrder seatId="s12" seatLabel="12" />);
+    fireEvent.click(await screen.findByRole("button", { name: `มาม่าต้มยำ 45 ${th["food.baht"]}` }));
+    fireEvent.click(screen.getByRole("button", { name: `โค้ก 20.50 ${th["food.baht"]}` }));
+    fireEvent.click(screen.getByRole("button", { name: th["food.more"].replace("{item}", "โค้ก") }));
+    expect((screen.getByRole("button", { name: `ขนมปังปิ้ง 30 ${th["food.baht"]}` }) as HTMLButtonElement).disabled).toBe(true); // sold out
+    expect(screen.getByText(`86 ${th["food.baht"]}`)).toBeTruthy(); // 45 + 2 × 20.50, preview only
+    fireEvent.change(screen.getByLabelText(th["food.note"]), { target: { value: "ไม่เผ็ด" } });
+    fireEvent.click(screen.getByRole("button", { name: th["food.placeOrder"] }));
+    expect(await screen.findByText(th["food.placed"].replace("{number}", "7").replace("{total}", "86"))).toBeTruthy();
+    const [, init] = fetchMock.mock.calls.find(([u]) => String(u).includes("/orders"))! as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ lines: [{ item_id: "i1", quantity: 1 }, { item_id: "i2", quantity: 2 }], note: "ไม่เผ็ด" });
+    expect((init.headers as Record<string, string>)["Idempotency-Key"]).toBeTruthy();
+  });
+
+  it("lets staff move an order along and record counter payment", async () => {
+    const order = {
+      id: "o1", number: 3, seat_label: "12", status: "placed", payment_status: "unpaid", payment_method: "counter", total: "45.00", note: "",
+      via: "mira", created_by: "user:a", created_at: "2026-11-25T10:00:00Z", paid_at: null,
+      lines: [{ item_id: "i1", name: "มาม่าต้มยำ", unit_price: "45.00", quantity: 1, line_total: "45.00" }],
+    };
+    const fetchMock = server({
+      "GET /v1/cafe/orders": { items: [order] },
+      "POST /v1/cafe/orders/o1/status": { ...order, status: "preparing" },
+      "POST /v1/cafe/orders/o1/paid": { ...order, payment_status: "paid" },
+    });
+    wrap(<OrdersBoard />);
+    expect(await screen.findByText("#3")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: th["food.startPreparing"] }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u).includes("/orders/o1/status"))).toBe(true));
+    const statusCall = fetchMock.mock.calls.find(([u]) => String(u).includes("/orders/o1/status"))! as unknown as [string, RequestInit];
+    expect(JSON.parse(String(statusCall[1].body))).toEqual({ status: "preparing" });
+    fireEvent.click(screen.getByRole("button", { name: th["food.markPaid"] }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u).includes("/orders/o1/paid"))).toBe(true));
+  });
+});
+
+describe("Mira food orders", () => {
+  it("shows each proposed line with the server's price on her confirmation card", async () => {
+    server({
+      "POST /v1/cafe/assistant": {
+        intent: "order_food",
+        tool_call: { name: "order_food", arguments: {}, source: "rules" },
+        reply: "สั่ง มาม่าต้มยำ x2 90 บาท รวม 90 บาท ส่งที่ที่นั่ง 12 ชำระที่เคาน์เตอร์ ใช่ไหมคะ",
+        data: { total: "90.00", lines: [{ name: "มาม่าต้มยำ", quantity: 2, unit_price: "45.00", line_total: "90.00" }] },
+        confirm: { action: "order_food", payload: { seat_id: "s12", expected_total: "90.00", lines: [{ item_id: "i1", quantity: 2 }] } },
+      },
+    });
+    const a = await askCafe("สั่งมาม่า 2 ที่ เครื่อง 12", "th");
+    expect(a?.data.lines).toEqual([{ description: "มาม่าต้มยำ ×2", approved_price: "90.00" }]);
+    expect(a?.confirm?.action).toBe("order_food");
   });
 });

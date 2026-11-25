@@ -17,9 +17,21 @@ interface CafeReply extends Omit<QtcAnswer, "agent" | "source"> {
   tool_call?: CafeToolCall | null;
 }
 
+interface FoodLine {
+  name: string;
+  quantity: number;
+  line_total: string;
+}
+
 function shape(answer: CafeReply): QtcAnswer {
   const { tool_call, ...rest } = answer;
-  return { ...rest, agent: "cafe", source: "cafe", data: { ...answer.data, ...(tool_call ? { tool_call } : {}) } };
+  const data = { ...answer.data, ...(tool_call ? { tool_call } : {}) };
+  // A food order's lines, in the form Mira's confirmation card shows: "มาม่าต้มยำ ×2" with the server's line total.
+  const food = (answer.data as { lines?: unknown }).lines;
+  if (answer.intent === "order_food" && Array.isArray(food)) {
+    data.lines = (food as FoodLine[]).map((l) => ({ description: `${l.name} ×${l.quantity}`, approved_price: l.line_total }));
+  }
+  return { ...rest, agent: "cafe", source: "cafe", data };
 }
 
 /** Is this a café command? Any failure (café disabled, network) counts as "no". */

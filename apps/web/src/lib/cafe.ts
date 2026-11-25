@@ -122,3 +122,87 @@ export async function waitForCommand(id: string, timeoutMs = 8000, everyMs = 500
   }
   return cmd;
 }
+
+// ---- food & drink orders ----------------------------------------------------------------------------------------
+export interface MenuCategory {
+  id: string;
+  name: string;
+  sort: number;
+  active: boolean;
+}
+
+export interface MenuItem {
+  id: string;
+  category_id: string;
+  name: string;
+  description: string;
+  aliases: string[];
+  price: string; // exact decimal string from the server, e.g. "45.00"
+  list_price: string | null; // the "was" price on a sale
+  is_new: boolean;
+  available: boolean;
+  sort: number;
+}
+
+export interface CafeOrderLine {
+  item_id: string | null;
+  name: string;
+  unit_price: string;
+  quantity: number;
+  line_total: string;
+}
+
+export interface CafeOrderRow {
+  id: string;
+  number: number;
+  seat_label: string | null;
+  status: "placed" | "preparing" | "delivered" | "cancelled";
+  payment_status: "unpaid" | "paid";
+  payment_method: string;
+  total: string;
+  note: string;
+  via: string;
+  created_by: string;
+  created_at: string;
+  paid_at: string | null;
+  lines: CafeOrderLine[];
+}
+
+export const menuApi = {
+  menu: (all = false, signal?: AbortSignal) => api<{ categories: MenuCategory[]; items: MenuItem[] }>("/v1/cafe/menu", { query: { all: all ? "true" : undefined }, signal }),
+  createCategory: (name: string, sort: number) => api<MenuCategory>("/v1/cafe/menu/categories", { method: "POST", body: { name, sort } }),
+  patchCategory: (id: string, body: Partial<Pick<MenuCategory, "name" | "sort" | "active">>) =>
+    api<MenuCategory>(`/v1/cafe/menu/categories/${id}`, { method: "PATCH", body }),
+  createItem: (body: { category_id: string; name: string; aliases: string[]; price: string; list_price: string | null; is_new: boolean }) =>
+    api<MenuItem>("/v1/cafe/menu/items", { method: "POST", body }),
+  patchItem: (id: string, body: { available?: boolean; price?: string; list_price?: string; clear_list_price?: boolean; is_new?: boolean }) =>
+    api<MenuItem>(`/v1/cafe/menu/items/${id}`, { method: "PATCH", body }),
+  placeOrder: (seatId: string, lines: { item_id: string; quantity: number }[], note: string, idempotencyKey: string) =>
+    api<CafeOrderRow>(`/v1/cafe/seats/${seatId}/orders`, {
+      method: "POST",
+      body: { lines, note },
+      headers: { "Idempotency-Key": idempotencyKey },
+    }),
+  orders: (status: "open" | "all", seatId?: string, signal?: AbortSignal) =>
+    api<{ items: CafeOrderRow[] }>("/v1/cafe/orders", { query: { status, seat_id: seatId }, signal }),
+  setStatus: (id: string, status: "preparing" | "delivered" | "cancelled") =>
+    api<CafeOrderRow>(`/v1/cafe/orders/${id}/status`, { method: "POST", body: { status } }),
+  markPaid: (id: string) => api<CafeOrderRow>(`/v1/cafe/orders/${id}/paid`, { method: "POST" }),
+};
+
+/** "1234.50" -> "1,234.50", "45.00" -> "45". Works on the exact string; never through a float. */
+export function formatBaht(amount: string): string {
+  const [whole, frac = ""] = amount.split(".");
+  const sign = whole.startsWith("-") ? "-" : "";
+  const digits = whole.replace("-", "").replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return `${sign}${digits}${frac && frac !== "00" ? `.${frac.padEnd(2, "0").slice(0, 2)}` : ""}`;
+}
+
+/** Display-only sum of exact decimal strings, in satang integers (the server's total is what counts). */
+export function sumBaht(lines: { price: string; quantity: number }[]): string {
+  const satang = lines.reduce((n, l) => {
+    const [w, f = "0"] = l.price.split(".");
+    return n + (Number(w) * 100 + Number(f.padEnd(2, "0").slice(0, 2))) * l.quantity;
+  }, 0);
+  return `${Math.floor(satang / 100)}.${String(satang % 100).padStart(2, "0")}`;
+}

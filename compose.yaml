@@ -33,7 +33,7 @@ x-api-env: &api-env
   # without it the API generates a key inside the container, which changes when the container is recreated and
   # then every enrolled seat PC rejects new commands (they pin the key at enrolment).
   CAFE_ENABLED: ${CAFE_ENABLED:-false}
-  CAFE_MODULES: ${CAFE_MODULES:-devices,sessions,launcher,assistant,assist}
+  CAFE_MODULES: ${CAFE_MODULES:-devices,sessions,launcher,assistant,assist,orders}
   CAFE_COMMAND_SIGNING_KEY: ${CAFE_COMMAND_SIGNING_KEY:-}
   CAFE_DEVICE_JWT_SECRET: ${CAFE_DEVICE_JWT_SECRET:-}
   BOOTSTRAP_ORG_NAME: ${BOOTSTRAP_ORG_NAME:-MCR Technology}

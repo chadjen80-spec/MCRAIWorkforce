@@ -71,8 +71,8 @@ class Settings(BaseSettings):
     # --- MCR Smart Café (internet café / gaming centre) -------------------------
     # Off by default: every /v1/cafe route answers 404 FEATURE_DISABLED and Mira ignores café commands.
     cafe_enabled: bool = False
-    # Modules switched on when cafe_enabled. Unfinished ones (orders, pos, members, printing, reports) stay off.
-    cafe_modules: str = "devices,sessions,launcher,assistant,assist"
+    # Modules switched on when cafe_enabled. Unfinished ones (pos, members, printing, reports) stay off.
+    cafe_modules: str = "devices,sessions,launcher,assistant,assist,orders"
     # ECDSA P-256 private key (PEM) that signs seat commands. Required in production; development generates
     # DATA_DIR/cafe_command_signing_key.pem once.
     cafe_command_signing_key: str = ""

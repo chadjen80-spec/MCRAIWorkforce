@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, UtcDateTime, utcnow
+
+Money = Numeric(12, 2)  # THB to the satang; never float
 
 
 def _uuid() -> uuid.UUID:
@@ -162,3 +165,91 @@ class CafeAuditEvent(Base):
     actor: Mapped[str] = mapped_column(String(320))
     detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+
+
+# ---- food & drink orders ------------------------------------------------------------------------------------
+class CafeMenuCategory(Base):
+    __tablename__ = "cafe_menu_categories"
+    __table_args__ = (UniqueConstraint("organization_id", "name", name="uq_cafe_menu_category_org_name"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    sort: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+
+
+class CafeMenuItem(Base):
+    """A food or drink the café sells. The price here is the only price an order ever uses."""
+
+    __tablename__ = "cafe_menu_items"
+    __table_args__ = (
+        CheckConstraint("price >= 0", name="ck_cafe_menu_item_price"),
+        CheckConstraint("list_price IS NULL OR list_price > price", name="ck_cafe_menu_item_list_price"),
+        Index("ix_cafe_menu_items_org_category", "organization_id", "category_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
+    category_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cafe_menu_categories.id", ondelete="RESTRICT"))
+    name: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str] = mapped_column(String(300), default="")
+    aliases: Mapped[list[str]] = mapped_column(JSON, default=list)  # other spoken names, for Mira
+    price: Mapped[Decimal] = mapped_column(Money)
+    list_price: Mapped[Decimal | None] = mapped_column(Money, nullable=True)  # the "was" price shown struck through on a sale
+    is_new: Mapped[bool] = mapped_column(default=False)
+    available: Mapped[bool] = mapped_column(default=True)  # sold out / off the menu when false
+    sort: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, onupdate=utcnow)
+
+
+class CafeOrder(Base):
+    __tablename__ = "cafe_orders"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "number", name="uq_cafe_order_org_number"),
+        UniqueConstraint("organization_id", "idempotency_key", name="uq_cafe_order_org_idempotency"),
+        CheckConstraint("status IN ('placed', 'preparing', 'delivered', 'cancelled')", name="ck_cafe_order_status"),
+        CheckConstraint("payment_status IN ('unpaid', 'paid')", name="ck_cafe_order_payment_status"),
+        CheckConstraint("total >= 0", name="ck_cafe_order_total"),
+        Index("ix_cafe_orders_org_status", "organization_id", "status"),
+        Index("ix_cafe_orders_org_seat", "organization_id", "seat_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
+    number: Mapped[int] = mapped_column(Integer)  # short order number staff call out, per organisation
+    seat_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cafe_seats.id", ondelete="RESTRICT"))
+    session_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("cafe_sessions.id", ondelete="SET NULL"), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="placed")
+    payment_status: Mapped[str] = mapped_column(String(16), default="unpaid")
+    payment_method: Mapped[str] = mapped_column(String(16), default="counter")  # the only method until a provider is connected
+    total: Mapped[Decimal] = mapped_column(Money)
+    note: Mapped[str] = mapped_column(String(50), default="")
+    via: Mapped[str] = mapped_column(String(16), default="seat")  # seat | mira | staff
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(320), default="")
+    paid_by: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, onupdate=utcnow)
+    paid_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+
+class CafeOrderLine(Base):
+    """Name and price are copied from the menu when the order is placed, so later menu edits never change an order."""
+
+    __tablename__ = "cafe_order_lines"
+    __table_args__ = (
+        CheckConstraint("quantity BETWEEN 1 AND 20", name="ck_cafe_order_line_quantity"),
+        CheckConstraint("unit_price >= 0 AND line_total >= 0", name="ck_cafe_order_line_amounts"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
+    order_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cafe_orders.id", ondelete="CASCADE"), index=True)
+    item_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("cafe_menu_items.id", ondelete="SET NULL"), nullable=True)
+    name: Mapped[str] = mapped_column(String(128))
+    unit_price: Mapped[Decimal] = mapped_column(Money)
+    quantity: Mapped[int] = mapped_column(Integer)
+    line_total: Mapped[Decimal] = mapped_column(Money)

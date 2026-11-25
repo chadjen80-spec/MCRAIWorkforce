@@ -12,8 +12,8 @@ export type CafeIntent = "launch_app" | "get_remaining_time" | "request_staff" |
 export type QtcIntent = "create_quotation" | "pending_quotations" | "unpaid_customers" | "receivables_summary" | "collection_drafts";
 
 export interface QtcConfirm {
-  // "launch_app" / "request_staff" come from the café assistant (lib/cafeAssistant), which shares this card and flow.
-  action: "create_quotation" | "draft_reminders" | "launch_app" | "request_staff";
+  // "launch_app" / "request_staff" / "order_food" come from the café assistant (lib/cafeAssistant), which shares this card and flow.
+  action: "create_quotation" | "draft_reminders" | "launch_app" | "request_staff" | "order_food";
   payload: Record<string, unknown>;
 }
 

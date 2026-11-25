@@ -24,9 +24,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.cafe import flags, service
+from app.cafe import flags, food_assistant, orders, service
 from app.cafe.api import staff
-from app.cafe.models import CafeApp, CafeCommand, CafeSeat
+from app.cafe.models import CafeApp, CafeCommand, CafeMenuCategory, CafeMenuItem, CafeOrder, CafeSeat
 from app.config import get_settings
 from app.db import get_db
 from app.deps import Principal
@@ -55,7 +55,8 @@ TOOLS: list[dict[str, Any]] = [
         "name": "order_food", "description": "Order food or drinks to a seat.",
         "parameters": {"type": "object", "additionalProperties": False, "properties": {
             "seat": {"type": "string"},
-            "items": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "quantity": {"type": "integer"}}}}}}}},
+            "items": {"type": "array", "items": {"type": "object", "required": ["name"], "properties": {
+                "name": {"type": "string", "description": "Menu item as said"}, "quantity": {"type": "integer", "minimum": 1}}}}}}}},
     {"type": "function", "function": {
         "name": "top_up_time", "description": "Buy more play time for a seat.",
         "parameters": {"type": "object", "additionalProperties": False,
@@ -137,11 +138,21 @@ def match_app(text: str, apps: list[CafeApp]) -> CafeApp | None:
     return max(near, key=lambda x: x[0])[1] if near else None
 
 
-def plan_rules(text: str, apps: list[CafeApp]) -> ToolCall | None:
+def _food_args(text: str, menu: list[CafeMenuItem]) -> list[dict[str, Any]]:
+    return [{"name": item.name, "quantity": qty} for item, qty in food_assistant.match_lines(text, menu)]
+
+
+def plan_rules(text: str, apps: list[CafeApp], menu: list[CafeMenuItem] | None = None) -> ToolCall | None:
     seat = SEAT_RE.search(text)
     args: dict[str, Any] = {"seat": seat.group(1)} if seat else {}
+    menu = menu or []
+    # "สั่งมาม่า 2 ที่", "ขอโค้กแก้วนึง": an order verb plus something on the café's own menu
+    if food_assistant.ORDER_VERB.search(text) and (food := _food_args(SEAT_RE.sub(" ", text), menu)):
+        return ToolCall("order_food", {**args, "items": food})
     for name, pattern in RULES:
         if pattern.search(text):
+            if name == "order_food":
+                return ToolCall(name, {**args, "items": _food_args(SEAT_RE.sub(" ", text), menu)})
             return ToolCall(name, args)
     if LAUNCH_VERB.search(text):
         app = match_app(text, apps)
@@ -272,12 +283,13 @@ def assistant(body: AssistantIn, principal: Principal = Depends(staff), session:
         return AssistantOut(intent=None)  # café off: Mira's other flows handle the text
     org_id, lang = principal.organization.id, body.language
     apps = list(session.scalars(select(CafeApp).where(CafeApp.organization_id == org_id)))
+    menu = _orderable(session, org_id) if flags.enabled("orders") else []
     call: ToolCall | None = None
     if body.use_ai:
         planned = plan_model(session, org_id, body.text)
-        call = planned if isinstance(planned, ToolCall) else (None if planned is None else plan_rules(body.text, apps))
+        call = planned if isinstance(planned, ToolCall) else (None if planned is None else plan_rules(body.text, apps, menu))
     else:
-        call = plan_rules(body.text, apps)
+        call = plan_rules(body.text, apps, menu)
     if call is None:
         return AssistantOut(intent=None)
     tool = {"name": call.name, "arguments": call.arguments, "source": call.source}
@@ -320,14 +332,16 @@ def assistant(body: AssistantIn, principal: Principal = Depends(staff), session:
         return AssistantOut(intent=call.name, tool_call=tool, data={"seat_label": seat.label, "app": app.name, "app_key": app.app_key},
                             reply=_t(lang, f"เปิด {app.name} ที่ที่นั่ง {seat.label} ใช่ไหมคะ", f"Open {app.name} on seat {seat.label}?"),
                             confirm={"action": "launch_app", "payload": {"seat_id": str(seat.id), "app_key": app.app_key}})
-    # order_food / top_up_time / print_document: their modules have no implementation yet even when listed
+    if call.name == "order_food":
+        return _propose_order(session, seat, call, tool, menu, lang)
+    # top_up_time / print_document: their modules have no implementation yet even when listed
     return AssistantOut(intent=call.name, tool_call=tool, data={"module": module, "implemented": False}, reply=_t(
         lang, "ฟีเจอร์นี้ยังไม่พร้อมใช้งานค่ะ กรุณาติดต่อพนักงานที่เคาน์เตอร์", "That feature isn't available yet. Please ask at the counter."))
 
 
 class ConfirmIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    action: Literal["launch_app", "request_staff"]
+    action: Literal["launch_app", "request_staff", "order_food"]
     payload: dict[str, Any]
     language: Literal["th", "en"] = "th"
     idempotency_key: str | None = Field(default=None, max_length=128)
@@ -349,6 +363,8 @@ def assistant_confirm(body: ConfirmIn, principal: Principal = Depends(staff), se
                                      source="mira", actor=principal.actor)
         return AssistantOut(intent="request_staff", data={"assist_id": str(req.id), "seat_label": seat.label, "status": req.status},
                             reply=_t(lang, f"แจ้งพนักงานแล้วค่ะ จะมีคนไปที่ที่นั่ง {seat.label}", f"Staff have been notified for seat {seat.label}."))
+    if body.action == "order_food":
+        return _confirm_order(session, seat, body.payload, principal.actor, body.idempotency_key or idempotency_key, lang)
     flags.require("launcher")
     app_key = str(body.payload.get("app_key", ""))
     app = service.find_app(session, org_id, app_key)
@@ -366,3 +382,76 @@ def assistant_confirm(body: ConfirmIn, principal: Principal = Depends(staff), se
     return AssistantOut(intent="launch_app", reply=result_reply(cmd, app_name, seat.label, lang),
                         data={"command_id": str(cmd.id), "status": cmd.status, "result": cmd.result, "seat_label": seat.label,
                               "app": app_name, "link": "/cafe/devices"})
+
+
+# ---- food & drink orders -------------------------------------------------------------------------------------------
+def _orderable(session: Session, org_id: uuid.UUID) -> list[CafeMenuItem]:
+    active = select(CafeMenuCategory.id).where(CafeMenuCategory.organization_id == org_id, CafeMenuCategory.active.is_(True))
+    return list(session.scalars(select(CafeMenuItem).where(CafeMenuItem.organization_id == org_id, CafeMenuItem.category_id.in_(active))))
+
+
+def _lines_text(priced: list[tuple[CafeMenuItem, int, Any]], lang: str) -> str:
+    unit = "บาท" if lang == "th" else "THB"
+    return ", ".join(f"{item.name} x{qty} {food_assistant.baht(orders.money(total))} {unit}" for item, qty, total in priced)
+
+
+def _propose_order(session: Session, seat: CafeSeat, call: ToolCall, tool: dict[str, Any], menu: list[CafeMenuItem],
+                   lang: str) -> AssistantOut:
+    """Price what was asked for from the menu and ask for a yes. Nothing is ordered here."""
+    lines, unknown = food_assistant.resolve_named(call.arguments.get("items"), menu)
+    if not lines:
+        if unknown:
+            names = ", ".join(unknown)
+            return AssistantOut(intent="order_food", tool_call=tool, data={"error": "ITEM_NOT_FOUND", "unknown": unknown},
+                                reply=_t(lang, f"ไม่พบ {names} ในเมนูของร้านค่ะ", f"{names} is not on the café's menu."))
+        return AssistantOut(intent="order_food", tool_call=tool, data={"needs": "items"},
+                            reply=_t(lang, "ต้องการสั่งอะไรคะ บอกชื่อเมนูและจำนวนได้เลยค่ะ", "What would you like? Say the menu item and how many."))
+    try:
+        priced, total = orders.price_lines(session, seat.organization_id, [orders.LineIn(item_id=i.id, quantity=q) for i, q in lines])
+    except orders.OrderError as exc:
+        item = str(exc.details.get("item", ""))
+        reply = (_t(lang, f"ตอนนี้ {item} หมดหรือไม่มีขายค่ะ", f"{item} isn't available right now.") if exc.code == "ITEM_UNAVAILABLE"
+                 else _t(lang, "สั่งรายการนี้ไม่ได้ค่ะ", "That order can't be placed."))
+        return AssistantOut(intent="order_food", tool_call=tool, data={"error": exc.code, "item": item}, reply=reply)
+    total_text = food_assistant.baht(orders.money(total))
+    missing = _t(lang, f" (ไม่พบ {', '.join(unknown)} ในเมนู)", f" ({', '.join(unknown)} is not on the menu)") if unknown else ""
+    reply = _t(lang, f"สั่ง {_lines_text(priced, lang)} รวม {total_text} บาท ส่งที่ที่นั่ง {seat.label} ชำระที่เคาน์เตอร์ ใช่ไหมคะ{missing}",
+               f"Order {_lines_text(priced, lang)}, total {total_text} THB, to seat {seat.label}, paid at the counter?{missing}")
+    return AssistantOut(
+        intent="order_food", tool_call=tool, reply=reply,
+        data={"seat_label": seat.label, "total": orders.money(total), "unknown": unknown,
+              "lines": [{"name": i.name, "quantity": q, "unit_price": orders.money(i.price), "line_total": orders.money(t)} for i, q, t in priced]},
+        confirm={"action": "order_food", "payload": {"seat_id": str(seat.id), "expected_total": orders.money(total),
+                                                     "lines": [{"item_id": str(i.id), "quantity": q} for i, q, _ in priced]}})
+
+
+def _confirm_order(session: Session, seat: CafeSeat, payload: dict[str, Any], actor: str, idempotency_key: str | None,
+                   lang: str) -> AssistantOut:
+    """A person said yes. The price is checked again: if the menu changed since Mira quoted it, nothing is ordered."""
+    flags.require("orders")
+    try:
+        lines = [orders.LineIn.model_validate(x) for x in payload.get("lines", [])]
+    except ValueError:
+        return AssistantOut(intent="order_food", data={"error": "BAD_ORDER"}, reply=_t(lang, "รายการสั่งไม่ถูกต้องค่ะ", "That order is not valid."))
+    replay = (session.scalar(select(CafeOrder).where(CafeOrder.organization_id == seat.organization_id, CafeOrder.idempotency_key == idempotency_key))
+              if idempotency_key else None)
+    try:
+        if replay is None:
+            _, total = orders.price_lines(session, seat.organization_id, lines)
+            if payload.get("expected_total") not in (None, orders.money(total)):
+                raise orders.OrderError("PRICE_CHANGED", "The menu price changed")
+        order = replay or orders.place_order(session, seat, lines, note="", actor=actor, via="mira", idempotency_key=idempotency_key)
+    except orders.OrderError as exc:
+        if exc.code == "PRICE_CHANGED":
+            return AssistantOut(intent="order_food", data={"error": exc.code},
+                                reply=_t(lang, "ราคาเมนูเพิ่งเปลี่ยนค่ะ ยังไม่ได้สั่ง กรุณาสั่งใหม่อีกครั้ง",
+                                         "A menu price just changed, so nothing was ordered. Please order again."))
+        item = str(exc.details.get("item", "")) or exc.message
+        return AssistantOut(intent="order_food", data={"error": exc.code, "item": item},
+                            reply=_t(lang, f"สั่งไม่สำเร็จค่ะ: {item}", f"The order wasn't placed: {item}"))
+    total_text = food_assistant.baht(orders.money(order.total))
+    return AssistantOut(intent="order_food",
+                        data={"order_id": str(order.id), "number": order.number, "total": orders.money(order.total), "status": order.status,
+                              "payment_status": order.payment_status, "seat_label": seat.label, "link": "/cafe/orders"},
+                        reply=_t(lang, f"สั่งแล้วค่ะ ออเดอร์ #{order.number} รวม {total_text} บาท ชำระที่เคาน์เตอร์ได้เลยค่ะ",
+                                 f"Ordered: order #{order.number}, total {total_text} THB, to be paid at the counter."))

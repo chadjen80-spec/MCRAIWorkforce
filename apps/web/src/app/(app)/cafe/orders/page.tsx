@@ -1,8 +1,17 @@
 "use client";
 
-import { CafeShell, ModuleOff } from "@/components/cafe/CafeShell";
+import { CafeShell } from "@/components/cafe/CafeShell";
+import { MenuEditor, OrdersBoard } from "@/components/cafe/OrdersBoard";
 
-// Designed, not built yet (see docs/MCR_SMART_CAFE_PRD.md). Even if the flag is switched on, nothing here pretends to be live.
 export default function CafeOrdersPage() {
-  return <CafeShell module="orders">{() => <ModuleOff module="orders" />}</CafeShell>;
+  return (
+    <CafeShell module="orders">
+      {() => (
+        <div className="space-y-10">
+          <OrdersBoard />
+          <MenuEditor />
+        </div>
+      )}
+    </CafeShell>
+  );
 }

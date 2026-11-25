@@ -86,10 +86,10 @@ def test_cafe_is_off_by_default_and_does_not_touch_mira(client, auth):
 
 def test_unfinished_modules_stay_off(cafe, client, auth):
     feats = client.get("/v1/cafe/features", headers=auth).json()["modules"]
-    assert feats["launcher"] and feats["devices"] and not feats["orders"] and not feats["printing"] and not feats["pos"]
+    assert feats["launcher"] and feats["devices"] and feats["orders"] and not feats["printing"] and not feats["pos"]
     _seat(client, auth)
-    out = client.post("/v1/cafe/assistant", json={"text": "สั่งมาม่าต้มยำ 1 ที่"}, headers=auth).json()
-    assert out["intent"] == "order_food" and out["confirm"] is None and out["data"]["enabled"] is False
+    out = client.post("/v1/cafe/assistant", json={"text": "ปริ้นไฟล์นี้ 2 แผ่น"}, headers=auth).json()
+    assert out["intent"] == "print_document" and out["confirm"] is None and out["data"]["enabled"] is False
     assert "ยังไม่เปิดใช้งาน" in out["reply"]
 
 

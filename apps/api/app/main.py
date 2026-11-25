@@ -14,6 +14,7 @@ from app.api import assets, assistant, jobs, posters, system
 from app.cafe import api as cafe_api
 from app.cafe import assistant as cafe_assistant
 from app.cafe import device_api as cafe_device_api
+from app.cafe import orders as cafe_orders
 from app.config import get_settings
 from app.errors import AppError
 from app.logging_config import configure_logging
@@ -94,6 +95,7 @@ def create_app() -> FastAPI:
     app.include_router(cafe_assistant.router)
     app.include_router(cafe_device_api.router)
     app.include_router(cafe_device_api.ws_router)
+    app.include_router(cafe_orders.router)
     return app
 
 

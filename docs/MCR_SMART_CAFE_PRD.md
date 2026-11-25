@@ -50,7 +50,7 @@ Each module ships behind its own feature flag (`CAFE_MODULES`), and the whole ca
 | Game launcher | `launcher` | Café app catalogue, per-device install status, launch by allowlist ID | **Slice built** |
 | AI customer kiosk / Mira | `assistant` | Thai voice/text commands with structured tool calls, answers from real results | **Slice built** for launch, remaining time, staff help; other tools answer "not enabled" |
 | Staff assistance | `assist` | Seat → staff help request, shown on the devices page | **Built** (request + list + resolve) |
-| Voice commerce (F&B) | `orders` | Menu, cart, order to the kitchen, order history | Designed only |
+| Voice commerce (F&B) | `orders` | Menu, cart, order to the kitchen, order history | **Built**: menu editor, seat-screen cart, staff board, counter payment, Mira orders with menu prices (no payment provider) |
 | POS and payment | `pos` | Counter sales, cash drawer, PromptPay QR, receipts, shift close | Designed only |
 | Membership and time packages | `members` | Member accounts, wallet, time packages, points | Designed only |
 | Smart print | `printing` | Seat uploads a document, staff releases it, per-page price | Designed only (client interface stub) |
