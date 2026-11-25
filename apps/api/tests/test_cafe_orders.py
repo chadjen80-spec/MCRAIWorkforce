@@ -168,6 +168,12 @@ def test_mira_is_honest_about_the_menu(shop, client, auth):
     assert sold_out["confirm"] is None and sold_out["data"]["error"] == "ITEM_UNAVAILABLE" and "หมด" in sold_out["reply"]
     vague = client.post("/v1/cafe/assistant", json={"text": "สั่งอาหารที่เครื่อง 12"}, headers=auth).json()
     assert vague["intent"] == "order_food" and vague["confirm"] is None and vague["data"]["needs"] == "items"
+    # with nothing named, Mira opens the menu for that seat on her screen
+    assert vague["data"]["show"] == "menu" and vague["data"]["seat_id"] == shop["seat"]["id"] and vague["data"]["seat_label"] == "12"
+    assert vague["reply"].startswith("เลือกเมนูให้ที่นั่ง 12")
+    # a one-seat café needs no seat number: "สั่งอาหาร" alone opens the menu too
+    alone = client.post("/v1/cafe/assistant", json={"text": "สั่งอาหาร"}, headers=auth).json()
+    assert alone["data"]["show"] == "menu" and alone["data"]["seat_label"] == "12"
     # game launches and other flows are unchanged
     assert client.post("/v1/cafe/assistant", json={"text": "เครื่อง 12 เหลือเวลาเท่าไหร่"}, headers=auth).json()["intent"] == "get_remaining_time"
     assert client.post("/v1/cafe/assistant", json={"text": "ทำโปสเตอร์โปรโมชันมาม่า"}, headers=auth).json()["intent"] is None

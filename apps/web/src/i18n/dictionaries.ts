@@ -1238,6 +1238,7 @@ const en = {
   "cafe.result.waiting": "Sent; the PC has not answered yet",
 
   // MCR Smart Café: food & drink orders
+  "food.menuFor": "Menu · seat {seat}",
   "food.categories": "Menu categories",
   "food.search": "Search the menu",
   "food.all": "All",
@@ -2525,6 +2526,7 @@ const th: Record<MessageKey, string> = {
   "cafe.result.waiting": "ส่งแล้ว เครื่องยังไม่ตอบกลับ",
 
   // MCR Smart Café: food & drink orders
+  "food.menuFor": "เมนูอาหาร · ที่นั่ง {seat}",
   "food.categories": "หมวดเมนู",
   "food.search": "ค้นหาเมนู",
   "food.all": "ทั้งหมด",

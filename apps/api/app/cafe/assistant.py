@@ -404,8 +404,11 @@ def _propose_order(session: Session, seat: CafeSeat, call: ToolCall, tool: dict[
             names = ", ".join(unknown)
             return AssistantOut(intent="order_food", tool_call=tool, data={"error": "ITEM_NOT_FOUND", "unknown": unknown},
                                 reply=_t(lang, f"ไม่พบ {names} ในเมนูของร้านค่ะ", f"{names} is not on the café's menu."))
-        return AssistantOut(intent="order_food", tool_call=tool, data={"needs": "items"},
-                            reply=_t(lang, "ต้องการสั่งอะไรคะ บอกชื่อเมนูและจำนวนได้เลยค่ะ", "What would you like? Say the menu item and how many."))
+        # "สั่งอาหาร" with nothing named: Mira opens the menu for this seat on her screen
+        return AssistantOut(intent="order_food", tool_call=tool,
+                            data={"needs": "items", "show": "menu", "seat_id": str(seat.id), "seat_label": seat.label},
+                            reply=_t(lang, f"เลือกเมนูให้ที่นั่ง {seat.label} ได้เลยค่ะ หรือบอกชื่อเมนูกับจำนวนก็ได้",
+                                     f"Pick from the menu for seat {seat.label}, or tell me the item and how many."))
     try:
         priced, total = orders.price_lines(session, seat.organization_id, [orders.LineIn(item_id=i.id, quantity=q) for i, q in lines])
     except orders.OrderError as exc:

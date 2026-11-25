@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { AgentGraph } from "@/components/AgentGraph";
 import { CafeMiraPanel } from "@/components/cafe/CafeMiraPanel";
+import { FoodOrder } from "@/components/cafe/FoodOrder";
 import { AssistantAvatar, type AvatarMode } from "@/components/AssistantAvatar";
 import { ChatBubbles } from "@/components/PosterChat";
 import { LogoUploadButton } from "@/components/LogoUploadButton";
@@ -51,7 +52,7 @@ import type {
 } from "@/lib/types";
 import { POSTER_WORDS, cafePageFor, confirmAction, posterIntent, qtcPageFor, type CafePage } from "@/lib/intent";
 import { askQtc, confirmQtc, qtcDecision, type QtcAnswer } from "@/lib/qtcAssistant";
-import { CAFE_NAV_ENABLED } from "@/lib/cafe";
+import { CAFE_NAV_ENABLED, formatBaht } from "@/lib/cafe";
 import { askCafe, confirmCafe } from "@/lib/cafeAssistant";
 import { useApi } from "@/lib/useApi";
 import { VoiceError, canListen, listenOnce, speak } from "@/lib/voice";
@@ -92,6 +93,8 @@ export default function AssistantPage() {
   const [posterMode, setPosterMode] = useState(false);
   // A café page name said to Mira shows the live café view here, in place of the agent graph.
   const [cafeView, setCafeView] = useState<CafePage | null>(null);
+  // "สั่งอาหาร" with nothing named: the seat's menu and cart, shown here like the café view.
+  const [menuSeat, setMenuSeat] = useState<{ id: string; label: string } | null>(null);
   const [posterSpec, setPosterSpec] = useState<PosterSpec>(EMPTY_POSTER);
   const posterSpecRef = useRef(posterSpec);
   useEffect(() => {
@@ -346,6 +349,7 @@ export default function AssistantPage() {
       setPending(null);
       setQtc(null);
       setJobId(null);
+      setMenuSeat(null);
       setCafeView(cafePage);
       await say(t(`assistant.openCafePage.${cafePage.name}`), signal);
       return;
@@ -356,6 +360,14 @@ export default function AssistantPage() {
     // Café commands (launch an app, remaining time, call staff) are asked first: they answer null when the café is off.
     const cafe = await askCafe(text, locale, signal);
     if (signal.aborted) return;
+    if (cafe?.intent === "order_food" && cafe.data.show === "menu" && typeof cafe.data.seat_id === "string") {
+      setPending(null);
+      setJobId(null);
+      setCafeView(null);
+      setMenuSeat({ id: cafe.data.seat_id, label: String(cafe.data.seat_label ?? "") });
+      await say(cafe.reply, signal);
+      return;
+    }
     if (cafe) return handleQtc(cafe, signal);
     const answer = await askQtc(text, locale, signal);
     if (signal.aborted) return;
@@ -555,6 +567,13 @@ export default function AssistantPage() {
   const backToMira = () => {
     setJobId(null);
     setCafeView(null);
+    setMenuSeat(null);
+  };
+  // Mira says what the server actually recorded: the order number and total it returned.
+  const announceOrder = async (order: { number: number; total: string }) => {
+    const signal = begin();
+    await say(t("food.placed", { number: String(order.number), total: formatBaht(order.total) }), signal);
+    end(signal);
   };
   const createPosterNow = async () => {
     const signal = begin();
@@ -749,7 +768,7 @@ export default function AssistantPage() {
   // top, Mira steps aside to the corner and keeps talking, and the graph takes the main area.
   const graphStage = jobId !== null;
   const posterStage = posterMode && !graphStage;
-  const cafeStage = cafeView !== null && !graphStage && !posterMode;
+  const cafeStage = (cafeView !== null || menuSeat !== null) && !graphStage && !posterMode;
   const sideStage = graphStage || posterStage || cafeStage;
 
   const snap = ops.snapshot;
@@ -1047,7 +1066,26 @@ export default function AssistantPage() {
           </div>
         )}
 
-        {cafeStage && cafeView && (
+        {cafeStage && menuSeat && (
+          <div className={cx("stage-swap relative px-3 pb-3 sm:px-6 sm:pb-6", fullScreen && "flex min-h-0 flex-1 flex-col")}>
+            <div className="mb-2 mr-32 flex min-h-9 flex-wrap items-center gap-2 text-sm font-semibold text-slate-800 sm:mr-52">
+              <h2 className="text-sm font-semibold">{t("food.menuFor", { seat: menuSeat.label })}</h2>
+              <span className="ml-auto flex flex-wrap gap-2">
+                <button type="button" onClick={backToMira} className={buttonClass("ghost", "sm")}>
+                  {t("graph.back")}
+                </button>
+                <Link href={`/cafe/seat/${menuSeat.id}`} className={buttonClass("secondary", "sm")}>
+                  {t("cafe.seatui.open")}
+                </Link>
+              </span>
+            </div>
+            <div className={cx("rounded-xl border border-cyan/30 bg-[#050912] p-3 text-ink", fullScreen && "min-h-0 flex-1 overflow-auto")}>
+              <FoodOrder seatId={menuSeat.id} seatLabel={menuSeat.label} onOrdered={(o) => void announceOrder(o)} />
+            </div>
+          </div>
+        )}
+
+        {cafeStage && !menuSeat && cafeView && (
           <div className={cx("stage-swap relative px-3 pb-3 sm:px-6 sm:pb-6", fullScreen && "flex min-h-0 flex-1 flex-col")}>
             <div className="mb-2 mr-32 flex min-h-9 flex-wrap items-center gap-2 text-sm font-semibold text-slate-800 sm:mr-52">
               <h2 className="text-sm font-semibold">{t("cafe.title")}</h2>

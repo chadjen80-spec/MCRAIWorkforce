@@ -203,7 +203,8 @@ describe("food & drink orders", () => {
         note: "ไม่เผ็ด", via: "seat", created_by: "user:a", created_at: "2026-11-25T10:00:00Z", paid_at: null, lines: [],
       },
     });
-    wrap(<FoodOrder seatId="s12" seatLabel="12" />);
+    const onOrdered = vi.fn();
+    wrap(<FoodOrder seatId="s12" seatLabel="12" onOrdered={onOrdered} />);
     fireEvent.click(await screen.findByRole("button", { name: `มาม่าต้มยำ 45 ${th["food.baht"]}` }));
     fireEvent.click(screen.getByRole("button", { name: `โค้ก 20.50 ${th["food.baht"]}` }));
     fireEvent.click(screen.getByRole("button", { name: th["food.more"].replace("{item}", "โค้ก") }));
@@ -212,6 +213,7 @@ describe("food & drink orders", () => {
     fireEvent.change(screen.getByLabelText(th["food.note"]), { target: { value: "ไม่เผ็ด" } });
     fireEvent.click(screen.getByRole("button", { name: th["food.placeOrder"] }));
     expect(await screen.findByText(th["food.placed"].replace("{number}", "7").replace("{total}", "86"))).toBeTruthy();
+    expect(onOrdered).toHaveBeenCalledWith(expect.objectContaining({ number: 7, total: "86.00" })); // Mira announces this
     const [, init] = fetchMock.mock.calls.find(([u]) => String(u).includes("/orders"))! as unknown as [string, RequestInit];
     expect(JSON.parse(String(init.body))).toEqual({ lines: [{ item_id: "i1", quantity: 1 }, { item_id: "i2", quantity: 2 }], note: "ไม่เผ็ด" });
     expect((init.headers as Record<string, string>)["Idempotency-Key"]).toBeTruthy();
