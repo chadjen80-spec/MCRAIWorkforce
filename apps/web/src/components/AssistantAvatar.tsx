@@ -19,6 +19,27 @@ export const AVATAR_MODEL_URL = "/models/nova.glb";
 type Three = typeof import("three");
 type Object3D = import("three").Object3D;
 
+/**
+ * The model's `Head` node has its origin in the middle of the face, far above the short neck (`Mesh_4`). Turning the
+ * head around that point swings the chin off the neck and leaves a gap. So the head is turned around the top of the
+ * neck instead: a pivot is placed there and the head hangs from it, keeping its exact position at rest.
+ */
+export function neckPivot(THREE: Three, head: Object3D | null, neck: Object3D | null): Object3D | null {
+  if (!head?.parent || !neck) return head;
+  let root: Object3D = head;
+  while (root.parent) root = root.parent;
+  root.updateMatrixWorld(true); // positions in the world are needed below
+  const box = new THREE.Box3().setFromObject(neck);
+  if (box.isEmpty()) return head;
+  const joint = new THREE.Vector3((box.min.x + box.max.x) / 2, box.max.y - (box.max.y - box.min.y) * 0.2, (box.min.z + box.max.z) / 2);
+  const pivot = new THREE.Group();
+  pivot.name = "HeadPivot";
+  head.parent.add(pivot);
+  pivot.position.copy(head.parent.worldToLocal(joint));
+  pivot.attach(head); // keeps the head where it is in the world
+  return pivot;
+}
+
 export function AssistantAvatar({
   mode,
   happy = false,
@@ -90,7 +111,7 @@ export function AssistantAvatar({
       scene.add(model);
 
       const node = (name: string) => model.getObjectByName(name) ?? null;
-      const head = node("Head");
+      const head = neckPivot(THREE, node("Head"), node("Mesh_4"));
       const upper = node("Upper");
       const arms = [node("ArmL"), node("ArmR")];
       const rest = (o: Object3D | null) => (o ? { o, rot: o.rotation.clone(), pos: o.position.clone() } : null);
